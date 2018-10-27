@@ -45,6 +45,8 @@ def signal_show(signal, frame):
     if not global_updates_running:
         global_updates_running = True
     else:
+        current_workspace = i3.get_tree().find_focused().workspace()
+        update_workspace(current_workspace)
         i3.command('workspace i3expod-temporary-workspace')
         global_updates_running = False
         ui_thread = Thread(target = show_ui)
@@ -482,6 +484,9 @@ def show_ui():
 
         pygame.display.update()
         pygame.time.wait(25)
+
+    if not jump:
+        i3.command('workspace ' + global_knowledge[global_knowledge['active']]['name'])
 
     pygame.display.quit()
     pygame.display.init()
