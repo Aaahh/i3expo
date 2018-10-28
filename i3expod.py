@@ -16,8 +16,11 @@ from debounce import Debounce
 from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
+from types import SimpleNamespace
 
 from xdg.BaseDirectory import xdg_config_home
+
+C = SimpleNamespace()
 
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -60,36 +63,56 @@ def signal_toggle_ui(signal, stack_frame):
         ui_thread.daemon = True
         ui_thread.start()
 
-def get_color(raw):
-    return pygame.Color(raw)
+
+def strict_float(raw):
+    try:
+        int(raw)
+    except:
+        return float(raw)
+    raise ValueError
+
+
+def strict_bool(raw):
+    if raw == 'True':
+        return True
+    elif raw == 'False':
+        return False
+    else:
+        raise ValueError
+
 
 def read_config():
+    global C
+    global WS
+
     pygame.display.init()
     disp_info = pygame.display.Info()
     config.read_dict({
-        'CONF': {
+        'Capture': {
             'screenshot_width'           : disp_info.current_w,
             'screenshot_height'          : disp_info.current_h,
             'screenshot_offset_x'        : 0,
             'screenshot_offset_y'        : 0,
+            'forced_update_interval_sec' : 10.0,
+            'debounce_period_sec'        : 1.0
+        },
 
+        'UI': {
             'window_width'               : disp_info.current_w,
             'window_height'              : disp_info.current_h,
-            'bgcolor'                    : 'gray20',
-
             'workspaces'                 : 9,
             'grid_x'                     : 3,
             'grid_y'                     : 3,
-
             'padding_percent_x'          : 5,
             'padding_percent_y'          : 5,
             'spacing_percent_x'          : 5,
             'spacing_percent_y'          : 5,
             'frame_width_px'             : 5,
+            'highlight_percentage'       : 20
+        },
 
-            'forced_update_interval_sec' : 10.0,
-            'debounce_period_sec'        : 1.0,
-
+        'Colors': {
+            'bgcolor'                    : 'gray20',
             'frame_active_color'         : '#3b4f8a',
             'frame_inactive_color'       : '#43747b',
             'frame_unknown_color'        : '#c8986b',
@@ -100,15 +123,21 @@ def read_config():
             'tile_unknown_color'         : '#ffe6d0',
             'tile_empty_color'           : 'gray80',
             'tile_nonexistant_color'     : 'gray40',
+            'names_color'                : 'white'
+        },
 
-            'names_show'                 : True,
+        'Fonts': {
             'names_font'                 : 'sans-serif',
-            'names_fontsize'             : 25,
-            'names_color'                : 'white',
-            'thumb_stretch'              : False,
-            'highlight_percentage'       : 20,
+            'names_fontsize'             : 25
+        },
 
+        'Flags': {
+            'names_show'                 : True,
+            'thumb_stretch'              : False,
             'switch_to_empty_workspaces' : False
+        },
+
+        'Workspaces': {
         }
     })
     pygame.display.quit()
@@ -123,12 +152,30 @@ def read_config():
         with open(config_file, 'w') as f:
             config.write(f)
 
+    for group in ['Capture', 'UI', 'Fonts', 'Flags', 'Colors']:
+        for item in config[group]:
+            for func in [config.getfloat, config.getint, config.getcolor, config.getboolean, config.get]:
+                try:
+                    setattr(C, item, func(group, item))
+                    break
+                except ValueError:
+                    pass
+            if item not in dir(C):
+                raise ValueError("Invalid config value for " + item)
+
+    WS = {}
+    for item in config['Workspaces']:
+        if item[:10] == 'workspace_':
+            WS[int(item[10:])] = config.get('Workspaces', item)
+        else:
+            raise ValueError("Invalid config variable: " + item)
 
 def grab_screen():
-    x1 = config.getint('CONF', 'screenshot_offset_x')
-    y1 = config.getint('CONF', 'screenshot_offset_y')
-    x2 = config.getint('CONF', 'screenshot_width')
-    y2 = config.getint('CONF', 'screenshot_height')
+    x1 = C.screenshot_offset_x
+    y1 = C.screenshot_offset_y
+    x2 = C.screenshot_width
+    y2 = C.screenshot_height
+
     w, h = x2-x1, y2-y1
     size = w * h
     objlength = size * 3
@@ -227,65 +274,30 @@ def get_hovered_tile(mpos, tiles):
 def show_ui():
     global global_updates_running
 
-    window_width = config.getint('CONF', 'window_width')
-    window_height = config.getint('CONF', 'window_height')
-    
-    workspaces = config.getint('CONF', 'workspaces')
-    grid_x = config.getint('CONF', 'grid_x')
-    grid_y = config.getint('CONF', 'grid_y')
-    
-    padding_x = config.getint('CONF', 'padding_percent_x')
-    padding_y = config.getint('CONF', 'padding_percent_y')
-    spacing_x = config.getint('CONF', 'spacing_percent_x')
-    spacing_y = config.getint('CONF', 'spacing_percent_y')
-    frame_width = config.getint('CONF', 'frame_width_px')
-    
-    frame_active_color = config.getcolor('CONF', 'frame_active_color')
-    frame_inactive_color = config.getcolor('CONF', 'frame_inactive_color')
-    frame_unknown_color = config.getcolor('CONF', 'frame_unknown_color')
-    frame_empty_color = config.getcolor('CONF', 'frame_empty_color')
-    frame_nonexistant_color = config.getcolor('CONF', 'frame_nonexistant_color')
-    
-    tile_active_color = config.getcolor('CONF', 'tile_active_color')
-    tile_inactive_color = config.getcolor('CONF', 'tile_inactive_color')
-    tile_unknown_color = config.getcolor('CONF', 'tile_unknown_color')
-    tile_empty_color = config.getcolor('CONF', 'tile_empty_color')
-    tile_nonexistant_color = config.getcolor('CONF', 'tile_nonexistant_color')
-    
-    names_show = config.getboolean('CONF', 'names_show')
-    names_font = config.get('CONF', 'names_font')
-    names_fontsize = config.getint('CONF', 'names_fontsize')
-    names_color = config.getcolor('CONF', 'names_color')
-
-    thumb_stretch = config.getboolean('CONF', 'thumb_stretch')
-    highlight_percentage = config.getint('CONF', 'highlight_percentage')
-
-    switch_to_empty_workspaces = config.getboolean('CONF', 'switch_to_empty_workspaces')
-
     pygame.display.init()
     pygame.font.init()
-    screen = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
+    screen = pygame.display.set_mode((C.window_width, C.window_height), pygame.RESIZABLE)
     pygame.display.set_caption('i3expo')
 
     total_x = screen.get_width()
     total_y = screen.get_height()
 
-    pad_x = round(total_x * padding_x / 100)
-    pad_y = round(total_y * padding_y / 100)
+    pad_x = round(total_x * C.padding_percent_x / 100)
+    pad_y = round(total_y * C.padding_percent_y / 100)
 
-    space_x = round(total_x * spacing_x / 100)
-    space_y = round(total_y * spacing_y / 100)
+    space_x = round(total_x * C.spacing_percent_x / 100)
+    space_y = round(total_y * C.spacing_percent_y / 100)
 
-    shot_outer_x = round((total_x - 2 * pad_x - space_x * (grid_x - 1)) / grid_x)
-    shot_outer_y = round((total_y - 2 * pad_y - space_y * (grid_y - 1)) / grid_y)
+    shot_outer_x = round((total_x - 2 * pad_x - space_x * (C.grid_x - 1)) / C.grid_x)
+    shot_outer_y = round((total_y - 2 * pad_y - space_y * (C.grid_y - 1)) / C.grid_y)
 
-    shot_inner_x = shot_outer_x - 2 * frame_width 
-    shot_inner_y = shot_outer_y - 2 * frame_width
+    shot_inner_x = shot_outer_x - 2 * C.frame_width_px 
+    shot_inner_y = shot_outer_y - 2 * C.frame_width_px
 
     offset_delta_x = shot_outer_x + space_x
     offset_delta_y = shot_outer_y + space_y
 
-    screen.fill(config.getcolor('CONF', 'bgcolor'))
+    screen.fill(C.bgcolor)
     
     missing = pygame.Surface((150,200), pygame.SRCALPHA, 32) 
     missing = missing.convert_alpha()
@@ -297,12 +309,12 @@ def show_ui():
 
     frames = {}
 
-    font = pygame.font.SysFont(names_font, names_fontsize)
+    font = pygame.font.SysFont(C.names_font, C.names_fontsize)
 
-    for y in range(grid_y):
-        for x in range(grid_x):
+    for y in range(C.grid_y):
+        for x in range(C.grid_x):
 
-            index = y * grid_x + x + 1
+            index = y * C.grid_x + x + 1
 
             frames[index] = {
                     'active': False,
@@ -313,24 +325,24 @@ def show_ui():
             }
 
             if global_knowledge['active'] == index:
-                tile_color = tile_active_color
-                frame_color = frame_active_color
+                tile_color = C.tile_active_color
+                frame_color = C.frame_active_color
                 image = process_img(global_knowledge[index]['screenshot'])
             elif index in global_knowledge.keys() and global_knowledge[index]['screenshot']:
-                tile_color = tile_inactive_color
-                frame_color = frame_inactive_color
+                tile_color = C.tile_inactive_color
+                frame_color = C.frame_inactive_color
                 image = process_img(global_knowledge[index]['screenshot'])
             elif index in global_knowledge.keys():
-                tile_color = tile_unknown_color
-                frame_color = frame_unknown_color
+                tile_color = C.tile_unknown_color
+                frame_color = C.frame_unknown_color
                 image = missing
-            elif index <= workspaces:
-                tile_color = tile_empty_color
-                frame_color = frame_empty_color
+            elif index <= C.workspaces:
+                tile_color = C.tile_empty_color
+                frame_color = C.frame_empty_color
                 image = None
             else:
-                tile_color = tile_nonexistant_color
-                frame_color = frame_nonexistant_color
+                tile_color = C.tile_nonexistant_color
+                frame_color = C.frame_nonexistant_color
                 image = None
 
             origin_x = pad_x + offset_delta_x * x
@@ -349,14 +361,14 @@ def show_ui():
 
             screen.fill(tile_color,
                     (
-                        origin_x + frame_width,
-                        origin_y + frame_width,
+                        origin_x + C.frame_width_px,
+                        origin_y + C.frame_width_px,
                         shot_inner_x,
                         shot_inner_y,
                     ))
 
             if image:
-                if thumb_stretch:
+                if C.thumb_stretch:
                     image = pygame.transform.smoothscale(image, (shot_inner_x, shot_inner_y))
                     offset_x = 0
                     offset_y = 0
@@ -377,12 +389,12 @@ def show_ui():
                         offset_x = round((shot_inner_x - result_x) / 2)
                         offset_y = 0
                     image = pygame.transform.smoothscale(image, (result_x, result_y))
-                screen.blit(image, (origin_x + frame_width + offset_x, origin_y + frame_width + offset_y))
+                screen.blit(image, (origin_x + C.frame_width_px + offset_x, origin_y + C.frame_width_px + offset_y))
 
             mouseoff = screen.subsurface((origin_x, origin_y, shot_outer_x, shot_outer_y)).copy()
             lightmask = pygame.Surface((shot_outer_x, shot_outer_y), pygame.SRCALPHA, 32)
             lightmask.convert_alpha()
-            lightmask.fill((255,255,255,255 * highlight_percentage / 100))
+            lightmask.fill((255,255,255,255 * C.highlight_percentage / 100))
             mouseon = mouseoff.copy()
             mouseon.blit(lightmask, (0, 0))
 
@@ -391,16 +403,16 @@ def show_ui():
 
             defined_name = False
             try:
-                defined_name = config.get('CONF', 'workspace_' + str(index))
+                defined_name = WS[index]
             except:
                 pass
 
-            if names_show and (index in global_knowledge.keys() or defined_name):
+            if C.names_show and (index in global_knowledge.keys() or defined_name):
                 if not defined_name:
                     name = global_knowledge[index]['name']
                 else:
                     name = defined_name
-                name = font.render(name, True, names_color)
+                name = font.render(name, True, C.names_color)
                 name_width = name.get_rect().size[0]
                 name_x = origin_x + round((shot_outer_x - name_width) / 2)
                 name_y = origin_y + shot_outer_y + round(shot_outer_y * 0.02)
@@ -453,20 +465,20 @@ def show_ui():
                 active_frame += kbdmove[0]
             elif kbdmove[1] != 0:
                 active_frame += kbdmove[1] * grid_x
-            if active_frame > workspaces:
-                active_frame -= workspaces
+            if active_frame > C.workspaces:
+                active_frame -= C.workspaces
             elif active_frame < 0:
-                active_frame += workspaces
+                active_frame += C.workspaces
             print(active_frame)
 
         if jump:
             if active_frame in global_knowledge.keys():
                 i3.command('workspace ' + str(global_knowledge[active_frame]['name']))
                 break
-            if switch_to_empty_workspaces:
+            if C.switch_to_empty_workspaces:
                 defined_name = False
                 try:
-                    defined_name = config.get('CONF', 'workspace_' + str(active_frame))
+                    defined_name = WS[active_frame]
                 except:
                     pass
                 if defined_name:
@@ -494,7 +506,7 @@ def show_ui():
 
 if __name__ == '__main__':
 
-    converters = {'color': get_color}
+    converters = {'color': pygame.Color, 'float': strict_float, 'boolean': strict_bool}
     config = configparser.ConfigParser(converters = converters)
 
     signal.signal(signal.SIGINT, signal_quit)
@@ -504,7 +516,7 @@ if __name__ == '__main__':
 
     read_config()
     init_knowledge()
-    updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'), update_state)
+    updater_debounced = Debounce(C.debounce_period_sec, update_state)
     update_state(i3, None)
 
     i3.on('window::move', updater_debounced)
@@ -517,5 +529,5 @@ if __name__ == '__main__':
     i3_thread.start()
 
     while True:
-        time.sleep(config.getfloat('CONF', 'forced_update_interval_sec'))
-        update_state(i3, config.getfloat('CONF', 'debounce_period_sec'), force = True)
+        time.sleep(C.forced_update_interval_sec)
+        update_state(i3, C.debounce_period_sec, force = True)
