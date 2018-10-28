@@ -83,7 +83,6 @@ def strict_bool(raw):
 
 def read_config():
     global C
-    global WS
 
     pygame.display.init()
     disp_info = pygame.display.Info()
@@ -163,10 +162,10 @@ def read_config():
             if item not in dir(C):
                 raise ValueError("Invalid config value for " + item)
 
-    WS = {}
+    setattr(C, 'workspace_names', {})
     for item in config['Workspaces']:
         if item[:10] == 'workspace_':
-            WS[int(item[10:])] = config.get('Workspaces', item)
+            C.workspace_names[int(item[10:])] = config.get('Workspaces', item)
         else:
             raise ValueError("Invalid config variable: " + item)
 
@@ -403,7 +402,7 @@ def show_ui():
 
             defined_name = False
             try:
-                defined_name = WS[index]
+                defined_name = C.workspace_names[index]
             except:
                 pass
 
@@ -478,7 +477,7 @@ def show_ui():
             if C.switch_to_empty_workspaces:
                 defined_name = False
                 try:
-                    defined_name = WS[active_frame]
+                    defined_name = C.workspace_names[active_frame]
                 except:
                     pass
                 if defined_name:
