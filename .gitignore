@@ -1,3 +1,4 @@
 gitfiles
 prtscn.so
 *.swp
+__pycache__

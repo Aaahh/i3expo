@@ -12,6 +12,8 @@ import sys
 import traceback
 import pprint
 import time
+from debounce import Debounce
+from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
 
@@ -28,34 +30,34 @@ config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
 screenshot_lib = 'prtscn.so'
 screenshot_lib_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + screenshot_lib
 grab = ctypes.CDLL(screenshot_lib_path)
+blacklist_classes = ['i3expod.py']
 
-def signal_quit(signal, frame):
-    print("Shutting down...")
+def signal_quit(signal, stack_frame):
+    print('Shutting down...')
     pygame.display.quit()
     pygame.quit()
     i3.main_quit()
     sys.exit(0)
 
-def signal_reload(signal, frame):
+def signal_reload(signal, stack_frame):
     read_config()
 
-def signal_show(signal, frame):
+def should_show_ui():
+    return len(global_knowledge) - 1 > 1
+
+def signal_toggle_ui(signal, stack_frame):
     global global_updates_running
     if not global_updates_running:
         global_updates_running = True
-    else:
+    elif should_show_ui():
         current_workspace = i3.get_tree().find_focused().workspace()
         update_workspace(current_workspace)
         i3.command('workspace i3expod-temporary-workspace')
         global_updates_running = False
+        updater_debounced.reset()
         ui_thread = Thread(target = show_ui)
         ui_thread.daemon = True
         ui_thread.start()
-
-signal.signal(signal.SIGINT, signal_quit)
-signal.signal(signal.SIGTERM, signal_quit)
-signal.signal(signal.SIGHUP, signal_reload)
-signal.signal(signal.SIGUSR1, signal_show)
 
 def get_color(raw):
     return pygame.Color(raw)
@@ -83,6 +85,9 @@ def read_config():
             'spacing_percent_x'          : 5,
             'spacing_percent_y'          : 5,
             'frame_width_px'             : 5,
+
+            'forced_update_interval_sec' : 10.0,
+            'debounce_period_sec'        : 1.0,
 
             'frame_active_color'         : '#3b4f8a',
             'frame_inactive_color'       : '#43747b',
@@ -112,7 +117,6 @@ def read_config():
         os.makedirs(root_dir)
 
     if os.path.exists(config_file):
-        print('exists')
         config.read(config_file)
     else:
         with open(config_file, 'w') as f:
@@ -137,61 +141,85 @@ def grab_screen():
     #draw.text((100,100), 'abcde')
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
+
 def update_workspace(workspace):
     if workspace.num not in global_knowledge.keys():
         global_knowledge[workspace.num] = {
-                'name': None,
-                'screenshot': None,
-                'windows': {}
+            'name'        : workspace.name,
+            'screenshot'  : None,
+            'last-update' : 0.0,
+            'state'       : 0,
+            'windows'     : {}
         }
 
     global_knowledge[workspace.num]['name'] = workspace.name
 
     global_knowledge['active'] = workspace.num
 
+
 def init_knowledge():
-    root = i3.get_tree()
-    for workspace in root.workspaces():
-        update_workspace(workspace)
+    for ws in i3.get_tree().workspaces():
+        update_workspace(ws)
 
-last_update = 0
 
-def update_state(i3, e):
-    global last_update
+def tree_has_changed(focused_ws):
+    state = 0
+    for con in focused_ws.leaves():
+        f = 31 if con.focused else 0  # so focus change can be detected
+        state += con.id % (con.rect.x + con.rect.y + con.rect.width + con.rect.height + f)
 
-    if not global_updates_running:
-        return False
-    if time.time() - last_update < 0.1:
-        return False
-    last_update = time.time()
+    if global_knowledge[focused_ws.num]['state'] == state: return False
+    global_knowledge[focused_ws.num]['state'] = state
 
-    root = i3.get_tree()
+    return True
+
+
+def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, force):
+    if not global_updates_running: return False
+    elif rate_limit_period != None and time.time() - global_knowledge[focused_ws.num]['last-update'] <= rate_limit_period: return False
+    elif focused_con.window_class in blacklist_classes: return False
+    elif force:
+        tree_has_changed(focused_ws)  # call it, as we still want to store changed state
+        updater_debounced.reset()
+        return True
+    elif not tree_has_changed(focused_ws): return False
+
+    return True
+
+
+def update_state(i3, e, rate_limit_period=None, force=False):
+    time.sleep(0.2)  # TODO system-specific; configurize?
+
+    container_tree = i3.get_tree()
+    focused_con = container_tree.find_focused()
+    focused_ws = focused_con.workspace()
+
+    update_workspace(focused_ws)
+
+    if not should_update(rate_limit_period, focused_con, focused_ws, container_tree, e, force): return
+
+    wspace_nums = [w.num for w in container_tree.workspaces()]
     deleted = []
-    for num in global_knowledge.keys():
-        if type(num) is int and num not in [w.num for w in root.workspaces()]:
-            deleted += [num]
-    for num in deleted:
-        del(global_knowledge[num])
+    for n in global_knowledge:
+        if type(n) is int and n not in wspace_nums:  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
+            deleted.append(n)
+    for n in deleted:
+        del global_knowledge[n]
 
-    current_workspace = root.find_focused().workspace()
-    update_workspace(current_workspace)
-
-    screenshot = grab_screen()
-
-    #time.sleep(0.5)
-
-    if current_workspace.num == i3ipc.Connection().get_tree().find_focused().workspace().num:
-        global_knowledge[current_workspace.num]['screenshot'] = screenshot
+    global_knowledge[focused_ws.num]['screenshot'] = grab_screen()
+    global_knowledge[focused_ws.num]['last-update'] = time.time()
 
 
-def get_hovered_frame(mpos, frames):
-    for frame in frames.keys():
-        if mpos[0] > frames[frame]['ul'][0] \
-                and mpos[0] < frames[frame]['br'][0] \
-                and mpos[1] > frames[frame]['ul'][1] \
-                and mpos[1] < frames[frame]['br'][1]:
-            return frame
+def get_hovered_tile(mpos, tiles):
+    for tile in tiles:
+        t = tiles[tile]
+        if (mpos[0] >= t['ul'][0]
+                and mpos[0] <= t['br'][0]
+                and mpos[1] >= t['ul'][1]
+                and mpos[1] <= t['br'][1]):
+            return tile
     return None
+
 
 def show_ui():
     global global_updates_running
@@ -414,7 +442,7 @@ def show_ui():
 
         if use_mouse:
             mpos = pygame.mouse.get_pos()
-            active_frame = get_hovered_frame(mpos, frames)
+            active_frame = get_hovered_tile(mpos, frames)
         elif kbdmove != (0, 0):
             if active_frame == None:
                 active_frame = 1
@@ -466,21 +494,25 @@ if __name__ == '__main__':
     converters = {'color': get_color}
     config = configparser.ConfigParser(converters = converters)
 
+    signal.signal(signal.SIGINT, signal_quit)
+    signal.signal(signal.SIGTERM, signal_quit)
+    signal.signal(signal.SIGHUP, signal_reload)
+    signal.signal(signal.SIGUSR1, signal_toggle_ui)
+
     read_config()
     init_knowledge()
+    updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'), update_state)
     update_state(i3, None)
 
-    i3.on('window::new', update_state)
-    i3.on('window::close', update_state)
-    i3.on('window::move', update_state)
-    i3.on('window::floating', update_state)
-    i3.on('window::fullscreen_mode', update_state)
-    #i3.on('workspace', update_state)
+    i3.on('window::move', updater_debounced)
+    i3.on('window::floating', updater_debounced)
+    i3.on('window::fullscreen_mode', partial(updater_debounced, force = True))
+    i3.on('window::focus', updater_debounced)
 
     i3_thread = Thread(target = i3.main)
     i3_thread.daemon = True
     i3_thread.start()
 
     while True:
-        time.sleep(1)
-        update_state(i3, None)
+        time.sleep(config.getfloat('CONF', 'forced_update_interval_sec'))
+        update_state(i3, config.getfloat('CONF', 'debounce_period_sec'), force = True)
