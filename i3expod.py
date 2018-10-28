@@ -22,7 +22,7 @@ from xdg.BaseDirectory import xdg_config_home
 pp = pprint.PrettyPrinter(indent=4)
 
 global_updates_running = True
-global_knowledge = {'active': 0}
+global_knowledge = {'active': -1}
 
 i3 = i3ipc.Connection()
 
@@ -143,7 +143,7 @@ def grab_screen():
 
 
 def update_workspace(workspace):
-    if workspace.num not in global_knowledge.keys():
+    if workspace.num not in global_knowledge:
         global_knowledge[workspace.num] = {
             'name'        : workspace.name,
             'screenshot'  : None,
@@ -151,8 +151,6 @@ def update_workspace(workspace):
             'state'       : 0,
             'windows'     : {}
         }
-
-    global_knowledge[workspace.num]['name'] = workspace.name
 
     global_knowledge['active'] = workspace.num
 
@@ -187,7 +185,7 @@ def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, f
     return True
 
 
-def update_state(i3, e, rate_limit_period=None, force=False):
+def update_state(i3, e=None, rate_limit_period=None, force=False):
     time.sleep(0.2)  # TODO system-specific; configurize?
 
     container_tree = i3.get_tree()
