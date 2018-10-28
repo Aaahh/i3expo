@@ -1,79 +1,124 @@
 #!/usr/bin/python3
 
+"""
+Show a configurable expose of i3 workspaces
+
+Dependencies: i3ipc, pygame
+
+Compile prtscn.cc as per instructions in the source code and place it with i3expo.py.
+"""
+
 import ctypes
 import os
 import configparser
-import pygame
-import i3ipc
 import signal
 import sys
 import time
-from debounce import Debounce
+from types import SimpleNamespace
 from functools import partial
 from threading import Thread
-from PIL import Image, ImageDraw
-from types import SimpleNamespace
+
+import pygame
+import i3ipc
+from PIL import Image
 from xdg.BaseDirectory import xdg_config_home
 
+from debounce import Debounce
+
 C = SimpleNamespace()
-i3 = i3ipc.Connection()
 
 global_updates_running = True
 global_knowledge = {'active': -1}
-config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
-screenshot_lib = 'prtscn.so'
-screenshot_lib_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + screenshot_lib
-grab = ctypes.CDLL(screenshot_lib_path)
-grab.getScreen.argtypes = []
-blacklist_classes = ['i3expod.py']
 
-def signal_quit(signal, stack_frame):
+CONFIG_FILE = os.path.join(xdg_config_home, 'i3expo', 'config')
+SCREENSHOT_LIB = 'prtscn.so'
+SCREENSHOT_LIB_PATH = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + SCREENSHOT_LIB
+GRAB = ctypes.CDLL(SCREENSHOT_LIB_PATH)
+GRAB.getScreen.argtypes = []
+BLACKLIST = ['i3expod.py']
+
+def con():
+    """ Return a connection to the i3 IPC """
+    return i3ipc.Connection()
+
+def signal_quit(sig, stack_frame):
+    """ Exit the application when SIGINT is received """
+    del sig
+    del stack_frame
     print('Shutting down...')
     pygame.display.quit()
     pygame.quit()
-    i3.main_quit()
+    con().main_quit()
     sys.exit(0)
 
-def signal_reload(signal, stack_frame):
+
+def signal_reload(sig, stack_frame):
+    """ Reload the configuration when SIGHUP is received """
+    del sig
+    del stack_frame
     read_config()
 
-def should_show_ui():
-    return len(global_knowledge) - 1 > 1
 
-def signal_toggle_ui(signal, stack_frame):
+def signal_toggle_ui(sig, stack_frame):
+    """ Show the expo UI when SIGUSR1 is received """
     global global_updates_running
+    global global_knowledge
+
+    del sig
+    del stack_frame
+
     if not global_updates_running:
         global_updates_running = True
-    elif should_show_ui():
-        current_workspace = i3.get_tree().find_focused().workspace()
-        update_workspace(current_workspace)
-        i3.command('workspace i3expod-temporary-workspace')
+    else:
+        current_workspace = con().get_tree().find_focused().workspace()
+        global_knowledge['active'] = current_workspace.num
+        con().command('workspace i3expod-temporary-workspace')
         global_updates_running = False
         updater_debounced.reset()
-        ui_thread = Thread(target = show_ui)
+        ui_thread = Thread(target=show_ui)
         ui_thread.daemon = True
         ui_thread.start()
 
 
 def strict_float(raw):
+    """ Returns float if passed exactly n+.n+, raises ValueError otherwise
+
+    Arguments:
+    str raw: The value to be checked
+
+    """
     try:
         int(raw)
-    except:
+    except ValueError:
         return float(raw)
     raise ValueError
 
 
 def strict_bool(raw):
+    """ Returns bool if passed exactly True or False, raises ValueError otherwise
+
+    Arguments:
+    str raw: The value to be checked
+    """
     if raw == 'True':
         return True
-    elif raw == 'False':
+    if raw == 'False':
         return False
-    else:
-        raise ValueError
+    raise ValueError
 
 
 def read_config():
+    """ Set default config values, read config file (or write if missing) and interpret results
+
+    Sets:
+    global C: The configurations SimpleNamespace
+    """
     global C
+
+    config = configparser.ConfigParser(converters={
+        'color': pygame.Color,
+        'float': strict_float,
+        'boolean': strict_bool})
 
     pygame.display.init()
     disp_info = pygame.display.Info()
@@ -132,19 +177,21 @@ def read_config():
     })
     pygame.display.quit()
 
-    root_dir = os.path.dirname(config_file)
+    root_dir = os.path.dirname(CONFIG_FILE)
     if not os.path.exists(root_dir):
         os.makedirs(root_dir)
 
-    if os.path.exists(config_file):
-        config.read(config_file)
+    if os.path.exists(CONFIG_FILE):
+        config.read(CONFIG_FILE)
     else:
-        with open(config_file, 'w') as f:
-            config.write(f)
+        with open(CONFIG_FILE, 'w') as config_file:
+            config.write(config_file)
+
+    value_order = [config.getfloat, config.getint, config.getcolor, config.getboolean, config.get]
 
     for group in ['Capture', 'UI', 'Fonts', 'Flags', 'Colors']:
         for item in config[group]:
-            for func in [config.getfloat, config.getint, config.getcolor, config.getboolean, config.get]:
+            for func in value_order:
                 try:
                     setattr(C, item, func(group, item))
                     break
@@ -161,22 +208,28 @@ def read_config():
             raise ValueError("Invalid config variable: " + item)
 
 def grab_screen():
-    x1 = C.screenshot_offset_x
-    y1 = C.screenshot_offset_y
-    x2 = C.screenshot_width
-    y2 = C.screenshot_height
+    """ Return a screenshot as a byte array
 
-    w, h = x2-x1, y2-y1
-    size = w * h
+    Returns:
+    (width, height, result) -- width, height, image byte array
+    """
+    width = C.screenshot_width - C.screenshot_offset_x
+    height = C.screenshot_height - C.screenshot_offset_y
+    size = width * height
     objlength = size * 3
 
-    result = (ctypes.c_ubyte*objlength)()
+    result = (ctypes.c_ubyte * objlength)()
 
-    grab.getScreen(x1, y1, w, h, result)
-    return (w, h, result)
+    GRAB.getScreen(C.screenshot_offset_x, C.screenshot_offset_y, width, height, result)
+    return (width, height, result)
 
 
 def process_img(raw_img):
+    """ Process an image byte array for use in PyGame
+
+    Returns:
+    pygame.image -- The screenshot
+    """
     try:
         pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
     except TypeError:
@@ -184,77 +237,112 @@ def process_img(raw_img):
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
-def update_workspace(workspace):
-    if workspace.num not in global_knowledge:
-        global_knowledge[workspace.num] = {
-            'name'        : workspace.name,
-            'screenshot'  : None,
-            'last-update' : 0.0,
-            'state'       : 0,
-            'windows'     : {}
-        }
+def make_active(workspace):
+    """ Check if active namespace is already known
 
+    Arguments:
+    workspace -- The current workspace
+    """
     global_knowledge['active'] = workspace.num
 
 
 def init_knowledge():
-    for ws in i3.get_tree().workspaces():
-        update_workspace(ws)
+    """ Initialize workspace dict
+
+    Sets:
+    global_knowledge -- What we know about the state of the WM
+    """
+    for workspace in con().get_tree().workspaces():
+        if workspace.num not in global_knowledge:
+            global_knowledge[workspace.num] = {
+                'name'        : workspace.name,
+                'screenshot'  : None,
+                'last-update' : 0.0,
+                'state'       : 0,
+                'windows'     : {}
+            }
 
 
 def tree_has_changed(focused_ws):
-    state = 0
-    for con in focused_ws.leaves():
-        f = 31 if con.focused else 0
-        state += con.id % (con.rect.x + con.rect.y + con.rect.width + con.rect.height + f)
+    """ Check if there are any changes in the current workspace
 
-    if global_knowledge[focused_ws.num]['state'] == state: return False
+    Arguments:
+    focused_ws -- Current workspace
+
+    Returns:
+    bool -- Whether there are any changes
+    """
+    state = 0
+    for cont in focused_ws.leaves():
+        focus = 31 if cont.focused else 0
+        state += cont.id % (cont.rect.x + cont.rect.y + cont.rect.width + cont.rect.height + focus)
+
+    if global_knowledge[focused_ws.num]['state'] == state:
+        return False
     global_knowledge[focused_ws.num]['state'] = state
 
     return True
 
 
-def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, force):
-    if not global_updates_running: return False
-    elif rate_limit_period != None and time.time() - global_knowledge[focused_ws.num]['last-update'] <= rate_limit_period: return False
-    elif focused_con.window_class in blacklist_classes: return False
-    elif force:
+def should_update(rate_limit_period, focused_con, focused_ws, force):
+    if not global_updates_running:
+        return False
+    if rate_limit_period is not None and \
+            time.time() - global_knowledge[focused_ws.num]['last-update'] <= rate_limit_period:
+        return False
+    if focused_con.window_class in BLACKLIST:
+        return False
+    if force:
         tree_has_changed(focused_ws)
         updater_debounced.reset()
         return True
-    elif not tree_has_changed(focused_ws): return False
+    if not tree_has_changed(focused_ws):
+        return False
 
     return True
 
 
-def update_state(i3, e=None, rate_limit_period=None, force=False):
-    container_tree = i3.get_tree()
+def update_state(event=None, rate_limit_period=None, force=False):
+    global global_knowledge
+
+    del event
+
+    container_tree = con().get_tree()
     focused_con = container_tree.find_focused()
     focused_ws = focused_con.workspace()
 
-    update_workspace(focused_ws)
+    global_knowledge['active'] = focused_ws.num
 
-    if not should_update(rate_limit_period, focused_con, focused_ws, container_tree, e, force): return
+    if not should_update(rate_limit_period, focused_con, focused_ws, force):
+        return
 
     wspace_nums = [w.num for w in container_tree.workspaces()]
     deleted = []
-    for n in global_knowledge:
-        if type(n) is int and n not in wspace_nums:
-            deleted.append(n)
-    for n in deleted:
-        del global_knowledge[n]
+    for item in global_knowledge:
+        if isinstance(item, int) and item not in wspace_nums:
+            deleted.append(item)
+    for item in deleted:
+        del global_knowledge[item]
 
     global_knowledge[focused_ws.num]['screenshot'] = grab_screen()
     global_knowledge[focused_ws.num]['last-update'] = time.time()
 
 
 def get_hovered_tile(mpos, tiles):
+    """ Get the currently hovered UI tile
+
+    Arguments:
+    mpos -- mouse position
+    tiles -- displayed tiles
+
+    Returns:
+    tile -- Hovered tile as int or None
+    """
     for tile in tiles:
-        t = tiles[tile]
-        if (mpos[0] >= t['ul'][0]
-                and mpos[0] <= t['br'][0]
-                and mpos[1] >= t['ul'][1]
-                and mpos[1] <= t['br'][1]):
+        if (mpos[0] >= tiles[tile]['ul'][0]
+                and mpos[0] <= tiles[tile]['br'][0]
+                and mpos[1] >= tiles[tile]['ul'][1]
+                and mpos[1] <= tiles[tile]['br'][1]):
             return tile
     return None
 
@@ -279,37 +367,37 @@ def show_ui():
     shot_outer_x = round((total_x - 2 * pad_x - space_x * (C.grid_x - 1)) / C.grid_x)
     shot_outer_y = round((total_y - 2 * pad_y - space_y * (C.grid_y - 1)) / C.grid_y)
 
-    shot_inner_x = shot_outer_x - 2 * C.frame_width_px 
+    shot_inner_x = shot_outer_x - 2 * C.frame_width_px
     shot_inner_y = shot_outer_y - 2 * C.frame_width_px
 
     offset_delta_x = shot_outer_x + space_x
     offset_delta_y = shot_outer_y + space_y
 
     screen.fill(C.bgcolor)
-    
-    missing = pygame.Surface((150,200), pygame.SRCALPHA, 32) 
+
+    missing = pygame.Surface((150, 200), pygame.SRCALPHA, 32)
     missing = missing.convert_alpha()
-    qm = pygame.font.SysFont('sans-serif', 150).render('?', True, (150, 150, 150))
-    qm_size = qm.get_rect().size
-    origin_x = round((150 - qm_size[0])/2)
-    origin_y = round((200 - qm_size[1])/2)
-    missing.blit(qm, (origin_x, origin_y))
+    question_mark = pygame.font.SysFont('sans-serif', 150).render('?', True, (150, 150, 150))
+    question_mark_size = question_mark.get_rect().size
+    origin_x = round((150 - question_mark_size[0])/2)
+    origin_y = round((200 - question_mark_size[1])/2)
+    missing.blit(question_mark, (origin_x, origin_y))
 
     frames = {}
 
     font = pygame.font.SysFont(C.names_font, C.names_fontsize)
 
-    for y in range(C.grid_y):
-        for x in range(C.grid_x):
+    for iter_y in range(C.grid_y):
+        for iter_x in range(C.grid_x):
 
-            index = y * C.grid_x + x + 1
+            index = iter_y * C.grid_x + iter_x + 1
 
             frames[index] = {
-                    'active': False,
-                    'mouseoff': None,
-                    'mouseon': None,
-                    'ul': (None, None),
-                    'br': (None, None)
+                'active': False,
+                'mouseoff': None,
+                'mouseon': None,
+                'ul': (None, None),
+                'br': (None, None)
             }
 
             if global_knowledge['active'] == index:
@@ -333,27 +421,27 @@ def show_ui():
                 frame_color = C.frame_nonexistant_color
                 image = None
 
-            origin_x = pad_x + offset_delta_x * x
-            origin_y = pad_y + offset_delta_y * y
+            origin_x = pad_x + offset_delta_x * iter_x
+            origin_y = pad_y + offset_delta_y * iter_y
 
             frames[index]['ul'] = (origin_x, origin_y)
             frames[index]['br'] = (origin_x + shot_outer_x, origin_y + shot_outer_y)
 
             screen.fill(frame_color,
-                    (
-                        origin_x,
-                        origin_y,
-                        shot_outer_x,
-                        shot_outer_y,
-                    ))
+                        (
+                            origin_x,
+                            origin_y,
+                            shot_outer_x,
+                            shot_outer_y,
+                        ))
 
             screen.fill(tile_color,
-                    (
-                        origin_x + C.frame_width_px,
-                        origin_y + C.frame_width_px,
-                        shot_inner_x,
-                        shot_inner_y,
-                    ))
+                        (
+                            origin_x + C.frame_width_px,
+                            origin_y + C.frame_width_px,
+                            shot_inner_x,
+                            shot_inner_y,
+                        ))
 
             if image:
                 if C.thumb_stretch:
@@ -377,12 +465,16 @@ def show_ui():
                         offset_x = round((shot_inner_x - result_x) / 2)
                         offset_y = 0
                     image = pygame.transform.smoothscale(image, (result_x, result_y))
-                screen.blit(image, (origin_x + C.frame_width_px + offset_x, origin_y + C.frame_width_px + offset_y))
+                screen.blit(image,
+                            (
+                                origin_x + C.frame_width_px + offset_x,
+                                origin_y + C.frame_width_px + offset_y
+                            ))
 
             mouseoff = screen.subsurface((origin_x, origin_y, shot_outer_x, shot_outer_y)).copy()
             lightmask = pygame.Surface((shot_outer_x, shot_outer_y), pygame.SRCALPHA, 32)
             lightmask.convert_alpha()
-            lightmask.fill((255,255,255,255 * C.highlight_percentage / 100))
+            lightmask.fill((255, 255, 255, 255 * C.highlight_percentage / 100))
             mouseon = mouseoff.copy()
             mouseon.blit(lightmask, (0, 0))
 
@@ -392,7 +484,7 @@ def show_ui():
             defined_name = False
             try:
                 defined_name = C.workspace_names[index]
-            except:
+            except KeyError:
                 pass
 
             if C.names_show and (index in global_knowledge.keys() or defined_name):
@@ -447,33 +539,32 @@ def show_ui():
             mpos = pygame.mouse.get_pos()
             active_frame = get_hovered_tile(mpos, frames)
         elif kbdmove != (0, 0):
-            if active_frame == None:
+            if active_frame is None:
                 active_frame = 1
             if kbdmove[0] != 0:
                 active_frame += kbdmove[0]
             elif kbdmove[1] != 0:
-                active_frame += kbdmove[1] * grid_x
+                active_frame += kbdmove[1] * C.grid_x
             if active_frame > C.workspaces:
                 active_frame -= C.workspaces
             elif active_frame < 0:
                 active_frame += C.workspaces
-            print(active_frame)
 
         if jump:
             if active_frame in global_knowledge.keys():
-                i3.command('workspace ' + str(global_knowledge[active_frame]['name']))
+                con().command('workspace ' + str(global_knowledge[active_frame]['name']))
                 break
             if C.switch_to_empty_workspaces:
                 defined_name = False
                 try:
                     defined_name = C.workspace_names[active_frame]
-                except:
+                except KeyError:
                     pass
                 if defined_name:
-                    i3.command('workspace ' + defined_name)
+                    con().command('workspace ' + defined_name)
                     break
 
-        for frame in frames.keys():
+        for frame in frames:
             if frames[frame]['active'] and not frame == active_frame:
                 screen.blit(frames[frame]['mouseoff'], frames[frame]['ul'])
                 frames[frame]['active'] = False
@@ -486,7 +577,7 @@ def show_ui():
         pygame.time.wait(25)
 
     if not jump:
-        i3.command('workspace ' + global_knowledge[global_knowledge['active']]['name'])
+        con().command('workspace ' + global_knowledge[global_knowledge['active']]['name'])
 
     pygame.display.quit()
     pygame.display.init()
@@ -494,8 +585,6 @@ def show_ui():
 
 if __name__ == '__main__':
 
-    converters = {'color': pygame.Color, 'float': strict_float, 'boolean': strict_bool}
-    config = configparser.ConfigParser(converters = converters)
 
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)
@@ -505,17 +594,17 @@ if __name__ == '__main__':
     read_config()
     init_knowledge()
     updater_debounced = Debounce(C.debounce_period_sec, update_state)
-    update_state(i3, None)
+    update_state(None)
 
-    i3.on('window::move', updater_debounced)
-    i3.on('window::floating', updater_debounced)
-    i3.on('window::fullscreen_mode', partial(updater_debounced, force = True))
-    i3.on('window::focus', updater_debounced)
+    con().on('window::move', updater_debounced)
+    con().on('window::floating', updater_debounced)
+    con().on('window::fullscreen_mode', partial(updater_debounced, force=True))
+    con().on('window::focus', updater_debounced)
 
-    i3_thread = Thread(target = i3.main)
+    i3_thread = Thread(target=con().main)
     i3_thread.daemon = True
     i3_thread.start()
 
     while True:
         time.sleep(C.forced_update_interval_sec)
-        update_state(i3, C.debounce_period_sec, force = True)
+        update_state(C.debounce_period_sec, force=True)
