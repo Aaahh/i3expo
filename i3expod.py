@@ -22,10 +22,9 @@ pp = pprint.PrettyPrinter(indent=4)
 global_updates_running = True
 global_knowledge = {'active': 0}
 
-pygame.display.init()
-pygame.font.init()
 i3 = i3ipc.Connection()
 
+config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
 screenshot_lib = 'prtscn.so'
 screenshot_lib_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + screenshot_lib
 grab = ctypes.CDLL(screenshot_lib_path)
@@ -58,106 +57,73 @@ signal.signal(signal.SIGTERM, signal_quit)
 signal.signal(signal.SIGHUP, signal_reload)
 signal.signal(signal.SIGUSR1, signal_show)
 
-config = configparser.RawConfigParser()
-
-def get_color(section = None, option = None, raw = None):
-    if not raw:
-        raw = config.get(section, option)
-
-    try:
-        return pygame.Color(*raw)
-    except (ValueError, TypeError):
-        pass
-
-    try:
-        return pygame.Color(raw)
-    except ValueError:
-        pass
-
-    if raw[0] == '#' and len(raw[1:]) == 3:
-        try:
-            r = int(raw[1], 16)
-            g = int(raw[2], 16)
-            b = int(raw[3], 16)
-            return pygame.Color(r * 16, g * 16, b * 16, 255)
-        except ValueError:
-            pass
-
-    if raw[0] == '#' and len(raw[1:]) == 6:
-        try:
-            r = int(raw[1:2], 16)
-            g = int(raw[3:4], 16)
-            b = int(raw[5:6], 16)
-            return pygame.Color(r, g, b, 255)
-        except ValueError:
-            pass
-
-    raise ValueError
-  
-    #except Exception as e:
-    #    print traceback.format_exc()
-
-defaults = {
-        ('Capture', 'screenshot_width'): (config.getint, pygame.display.Info().current_w),
-        ('Capture', 'screenshot_height'): (config.getint, pygame.display.Info().current_h),
-        ('Capture', 'screenshot_offset_x'): (config.getint, 0),
-        ('Capture', 'screenshot_offset_y'): (config.getint, 0),
-
-        ('UI', 'window_width'): (config.getint, pygame.display.Info().current_w),
-        ('UI', 'window_height'): (config.getint, pygame.display.Info().current_h),
-        ('UI', 'bgcolor'): (get_color, get_color(raw = 'gray20')),
-        ('UI', 'workspaces'): (config.getint, None),
-        ('UI', 'grid_x'): (config.getint, None),
-        ('UI', 'grid_y'): (config.getint, None),
-        ('UI', 'padding_percent_x'): (config.getint, 5),
-        ('UI', 'padding_percent_y'): (config.getint, 5),
-        ('UI', 'spacing_percent_x'): (config.getint, 5),
-        ('UI', 'spacing_percent_y'): (config.getint, 5),
-        ('UI', 'frame_width_px'): (config.getint, 5),
-        ('UI', 'frame_active_color'): (get_color, get_color(raw = '#3b4f8a')),
-        ('UI', 'frame_inactive_color'): (get_color, get_color(raw = '#43747b')),
-        ('UI', 'frame_unknown_color'): (get_color, get_color(raw = '#c8986b')),
-        ('UI', 'frame_empty_color'): (get_color, get_color(raw = 'gray60')),
-        ('UI', 'frame_nonexistant_color'): (get_color, get_color(raw = 'gray30')),
-        ('UI', 'tile_active_color'): (get_color, get_color(raw = '#5a6da4')),
-        ('UI', 'tile_inactive_color'): (get_color, get_color(raw = '#93afb3')),
-        ('UI', 'tile_unknown_color'): (get_color, get_color(raw = '#ffe6d0')),
-        ('UI', 'tile_empty_color'): (get_color, get_color(raw = 'gray80')),
-        ('UI', 'tile_nonexistant_color'): (get_color, get_color(raw = 'gray40')),
-        ('UI', 'names_show'): (config.getboolean, 'True'),
-        ('UI', 'names_font'): (config.get, 'sans-serif'),
-        ('UI', 'names_fontsize'): (config.getint, 25),
-        ('UI', 'names_color'): (get_color, get_color(raw = 'white')),
-        ('UI', 'thumb_stretch'): (config.getboolean, 'False'),
-        ('UI', 'highlight_percentage'): (config.getint, 20),
-        ('UI', 'switch_to_empty_workspaces'): (config.getboolean, 'False')
-}
+def get_color(raw):
+    return pygame.Color(raw)
 
 def read_config():
-    config.read(os.path.join(xdg_config_home, "i3expo", "config"))
-    for option in defaults.keys():
-        if not isset(option):
-            if defaults[option][1] == None:
-                print("Error: Mandatory option " + str(option) + " not set!")
-                sys.exit(1)
-            config.set(*option, value=defaults[option][1])
+    pygame.display.init()
+    disp_info = pygame.display.Info()
+    config.read_dict({
+        'CONF': {
+            'screenshot_width'           : disp_info.current_w,
+            'screenshot_height'          : disp_info.current_h,
+            'screenshot_offset_x'        : 0,
+            'screenshot_offset_y'        : 0,
 
-def get_config(*option):
-    return defaults[option][0](*option)
+            'window_width'               : disp_info.current_w,
+            'window_height'              : disp_info.current_h,
+            'bgcolor'                    : 'gray20',
 
-def isset(option):
-    try:
-        if defaults[option][0](*option) == "None":
-            return False
-        return True
-    except ValueError:
-        return False
+            'workspaces'                 : 9,
+            'grid_x'                     : 3,
+            'grid_y'                     : 3,
+
+            'padding_percent_x'          : 5,
+            'padding_percent_y'          : 5,
+            'spacing_percent_x'          : 5,
+            'spacing_percent_y'          : 5,
+            'frame_width_px'             : 5,
+
+            'frame_active_color'         : '#3b4f8a',
+            'frame_inactive_color'       : '#43747b',
+            'frame_unknown_color'        : '#c8986b',
+            'frame_empty_color'          : 'gray60',
+            'frame_nonexistant_color'    : 'gray30',
+            'tile_active_color'          : '#5a6da4',
+            'tile_inactive_color'        : '#93afb3',
+            'tile_unknown_color'         : '#ffe6d0',
+            'tile_empty_color'           : 'gray80',
+            'tile_nonexistant_color'     : 'gray40',
+
+            'names_show'                 : True,
+            'names_font'                 : 'sans-serif',
+            'names_fontsize'             : 25,
+            'names_color'                : 'white',
+            'thumb_stretch'              : False,
+            'highlight_percentage'       : 20,
+
+            'switch_to_empty_workspaces' : False
+        }
+    })
+    pygame.display.quit()
+
+    root_dir = os.path.dirname(config_file)
+    if not os.path.exists(root_dir):
+        os.makedirs(root_dir)
+
+    if os.path.exists(config_file):
+        print('exists')
+        config.read(config_file)
+    else:
+        with open(config_file, 'w') as f:
+            config.write(f)
+
 
 def grab_screen():
-    x1 = get_config('Capture','screenshot_offset_x')
-    y1 = get_config('Capture','screenshot_offset_y')
-    x2 = get_config('Capture','screenshot_width')
-    y2 = get_config('Capture','screenshot_height')
+    x1 = config.getint('CONF', 'screenshot_offset_x')
+    y1 = config.getint('CONF', 'screenshot_offset_y')
+    x2 = config.getint('CONF', 'screenshot_width')
+    y2 = config.getint('CONF', 'screenshot_height')
     w, h = x2-x1, y2-y1
     size = w * h
     objlength = size * 3
@@ -230,41 +196,43 @@ def get_hovered_frame(mpos, frames):
 def show_ui():
     global global_updates_running
 
-    window_width = get_config('UI', 'window_width')
-    window_height = get_config('UI', 'window_height')
+    window_width = config.getint('CONF', 'window_width')
+    window_height = config.getint('CONF', 'window_height')
     
-    workspaces = get_config('UI', 'workspaces')
-    grid_x = get_config('UI', 'grid_x')
-    grid_y = get_config('UI', 'grid_y')
+    workspaces = config.getint('CONF', 'workspaces')
+    grid_x = config.getint('CONF', 'grid_x')
+    grid_y = config.getint('CONF', 'grid_y')
     
-    padding_x = get_config('UI', 'padding_percent_x')
-    padding_y = get_config('UI', 'padding_percent_y')
-    spacing_x = get_config('UI', 'spacing_percent_x')
-    spacing_y = get_config('UI', 'spacing_percent_y')
-    frame_width = get_config('UI', 'frame_width_px')
+    padding_x = config.getint('CONF', 'padding_percent_x')
+    padding_y = config.getint('CONF', 'padding_percent_y')
+    spacing_x = config.getint('CONF', 'spacing_percent_x')
+    spacing_y = config.getint('CONF', 'spacing_percent_y')
+    frame_width = config.getint('CONF', 'frame_width_px')
     
-    frame_active_color = get_config('UI', 'frame_active_color')
-    frame_inactive_color = get_config('UI', 'frame_inactive_color')
-    frame_unknown_color = get_config('UI', 'frame_unknown_color')
-    frame_empty_color = get_config('UI', 'frame_empty_color')
-    frame_nonexistant_color = get_config('UI', 'frame_nonexistant_color')
+    frame_active_color = config.getcolor('CONF', 'frame_active_color')
+    frame_inactive_color = config.getcolor('CONF', 'frame_inactive_color')
+    frame_unknown_color = config.getcolor('CONF', 'frame_unknown_color')
+    frame_empty_color = config.getcolor('CONF', 'frame_empty_color')
+    frame_nonexistant_color = config.getcolor('CONF', 'frame_nonexistant_color')
     
-    tile_active_color = get_config('UI', 'tile_active_color')
-    tile_inactive_color = get_config('UI', 'tile_inactive_color')
-    tile_unknown_color = get_config('UI', 'tile_unknown_color')
-    tile_empty_color = get_config('UI', 'tile_empty_color')
-    tile_nonexistant_color = get_config('UI', 'tile_nonexistant_color')
+    tile_active_color = config.getcolor('CONF', 'tile_active_color')
+    tile_inactive_color = config.getcolor('CONF', 'tile_inactive_color')
+    tile_unknown_color = config.getcolor('CONF', 'tile_unknown_color')
+    tile_empty_color = config.getcolor('CONF', 'tile_empty_color')
+    tile_nonexistant_color = config.getcolor('CONF', 'tile_nonexistant_color')
     
-    names_show = get_config('UI', 'names_show')
-    names_font = get_config('UI', 'names_font')
-    names_fontsize = get_config('UI', 'names_fontsize')
-    names_color = get_config('UI', 'names_color')
+    names_show = config.getboolean('CONF', 'names_show')
+    names_font = config.get('CONF', 'names_font')
+    names_fontsize = config.getint('CONF', 'names_fontsize')
+    names_color = config.getcolor('CONF', 'names_color')
 
-    thumb_stretch = get_config('UI', 'thumb_stretch')
-    highlight_percentage = get_config('UI', 'highlight_percentage')
+    thumb_stretch = config.getboolean('CONF', 'thumb_stretch')
+    highlight_percentage = config.getint('CONF', 'highlight_percentage')
 
-    switch_to_empty_workspaces = get_config('UI', 'switch_to_empty_workspaces')
+    switch_to_empty_workspaces = config.getboolean('CONF', 'switch_to_empty_workspaces')
 
+    pygame.display.init()
+    pygame.font.init()
     screen = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
     pygame.display.set_caption('i3expo')
 
@@ -286,7 +254,7 @@ def show_ui():
     offset_delta_x = shot_outer_x + space_x
     offset_delta_y = shot_outer_y + space_y
 
-    screen.fill(get_config('UI', 'bgcolor'))
+    screen.fill(config.getcolor('CONF', 'bgcolor'))
     
     missing = pygame.Surface((150,200), pygame.SRCALPHA, 32) 
     missing = missing.convert_alpha()
@@ -392,7 +360,7 @@ def show_ui():
 
             defined_name = False
             try:
-                defined_name = config.get('Workspaces', 'workspace_' + str(index))
+                defined_name = config.get('CONF', 'workspace_' + str(index))
             except:
                 pass
 
@@ -467,7 +435,7 @@ def show_ui():
             if switch_to_empty_workspaces:
                 defined_name = False
                 try:
-                    defined_name = config.get('Workspaces', 'workspace_' + str(active_frame))
+                    defined_name = config.get('CONF', 'workspace_' + str(active_frame))
                 except:
                     pass
                 if defined_name:
@@ -494,6 +462,9 @@ def show_ui():
     global_updates_running = True
 
 if __name__ == '__main__':
+
+    converters = {'color': get_color}
+    config = configparser.ConfigParser(converters = converters)
 
     read_config()
     init_knowledge()
