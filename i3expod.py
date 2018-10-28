@@ -3,32 +3,23 @@
 import ctypes
 import os
 import configparser
-import xdg
 import pygame
 import i3ipc
-import copy
 import signal
 import sys
-import traceback
-import pprint
 import time
 from debounce import Debounce
 from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
 from types import SimpleNamespace
-
 from xdg.BaseDirectory import xdg_config_home
 
 C = SimpleNamespace()
-
-pp = pprint.PrettyPrinter(indent=4)
+i3 = i3ipc.Connection()
 
 global_updates_running = True
 global_knowledge = {'active': -1}
-
-i3 = i3ipc.Connection()
-
 config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
 screenshot_lib = 'prtscn.so'
 screenshot_lib_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + screenshot_lib
@@ -214,7 +205,7 @@ def init_knowledge():
 def tree_has_changed(focused_ws):
     state = 0
     for con in focused_ws.leaves():
-        f = 31 if con.focused else 0  # so focus change can be detected
+        f = 31 if con.focused else 0
         state += con.id % (con.rect.x + con.rect.y + con.rect.width + con.rect.height + f)
 
     if global_knowledge[focused_ws.num]['state'] == state: return False
@@ -228,7 +219,7 @@ def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, f
     elif rate_limit_period != None and time.time() - global_knowledge[focused_ws.num]['last-update'] <= rate_limit_period: return False
     elif focused_con.window_class in blacklist_classes: return False
     elif force:
-        tree_has_changed(focused_ws)  # call it, as we still want to store changed state
+        tree_has_changed(focused_ws)
         updater_debounced.reset()
         return True
     elif not tree_has_changed(focused_ws): return False
@@ -237,8 +228,6 @@ def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, f
 
 
 def update_state(i3, e=None, rate_limit_period=None, force=False):
-    time.sleep(0.2)  # TODO system-specific; configurize?
-
     container_tree = i3.get_tree()
     focused_con = container_tree.find_focused()
     focused_ws = focused_con.workspace()
@@ -250,7 +239,7 @@ def update_state(i3, e=None, rate_limit_period=None, force=False):
     wspace_nums = [w.num for w in container_tree.workspaces()]
     deleted = []
     for n in global_knowledge:
-        if type(n) is int and n not in wspace_nums:  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
+        if type(n) is int and n not in wspace_nums:
             deleted.append(n)
     for n in deleted:
         del global_knowledge[n]
