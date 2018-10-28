@@ -30,6 +30,7 @@ config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
 screenshot_lib = 'prtscn.so'
 screenshot_lib_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + screenshot_lib
 grab = ctypes.CDLL(screenshot_lib_path)
+grab.getScreen.argtypes = []
 blacklist_classes = ['i3expod.py']
 
 def signal_quit(signal, stack_frame):
@@ -132,13 +133,17 @@ def grab_screen():
     size = w * h
     objlength = size * 3
 
-    grab.getScreen.argtypes = []
     result = (ctypes.c_ubyte*objlength)()
 
-    grab.getScreen(x1,y1, w, h, result)
-    pil = Image.frombuffer('RGB', (w, h), result, 'raw', 'RGB', 0, 1)
-    #draw = ImageDraw.Draw(pil)
-    #draw.text((100,100), 'abcde')
+    grab.getScreen(x1, y1, w, h, result)
+    return (w, h, result)
+
+
+def process_img(raw_img):
+    try:
+        pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
+    except TypeError:
+        return None
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
@@ -310,11 +315,11 @@ def show_ui():
             if global_knowledge['active'] == index:
                 tile_color = tile_active_color
                 frame_color = frame_active_color
-                image = global_knowledge[index]['screenshot']
+                image = process_img(global_knowledge[index]['screenshot'])
             elif index in global_knowledge.keys() and global_knowledge[index]['screenshot']:
                 tile_color = tile_inactive_color
                 frame_color = frame_inactive_color
-                image = global_knowledge[index]['screenshot']
+                image = process_img(global_knowledge[index]['screenshot'])
             elif index in global_knowledge.keys():
                 tile_color = tile_unknown_color
                 frame_color = frame_unknown_color
