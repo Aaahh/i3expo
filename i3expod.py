@@ -478,11 +478,12 @@ def show_ui():
             if frames[frame]['active'] and not frame == active_frame:
                 screen.blit(frames[frame]['mouseoff'], frames[frame]['ul'])
                 frames[frame]['active'] = False
+                pygame.display.update((frames[frame]['ul'], frames[frame]['br']))
         if active_frame and not frames[active_frame]['active']:
             screen.blit(frames[active_frame]['mouseon'], frames[active_frame]['ul'])
             frames[active_frame]['active'] = True
+            pygame.display.update((frames[active_frame]['ul'], frames[active_frame]['br']))
 
-        pygame.display.update()
         pygame.time.wait(25)
 
     if not jump:
