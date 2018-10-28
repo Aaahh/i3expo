@@ -75,10 +75,7 @@ def signal_toggle_ui(sig, stack_frame):
         con().command('workspace i3expod-temporary-workspace')
         global_updates_running = False
         updater_debounced.reset()
-        ui_thread = Thread(target=show_ui)
-        ui_thread.daemon = True
-        ui_thread.start()
-
+        ui = Interface(C)
 
 def strict_float(raw):
     """ Returns float if passed exactly n+.n+, raises ValueError otherwise
@@ -224,17 +221,6 @@ def grab_screen():
     return (width, height, result)
 
 
-def process_img(raw_img):
-    """ Process an image byte array for use in PyGame
-
-    Returns:
-    pygame.image -- The screenshot
-    """
-    try:
-        pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
-    except TypeError:
-        return None
-    return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
 def make_active(workspace):
@@ -328,264 +314,312 @@ def update_state(event=None, rate_limit_period=None, force=False):
     global_knowledge[focused_ws.num]['last-update'] = time.time()
 
 
-def get_hovered_tile(mpos, tiles):
-    """ Get the currently hovered UI tile
-
-    Arguments:
-    mpos -- mouse position
-    tiles -- displayed tiles
-
-    Returns:
-    tile -- Hovered tile as int or None
-    """
-    for tile in tiles:
-        if (mpos[0] >= tiles[tile]['ul'][0]
-                and mpos[0] <= tiles[tile]['br'][0]
-                and mpos[1] >= tiles[tile]['ul'][1]
-                and mpos[1] <= tiles[tile]['br'][1]):
-            return tile
-    return None
 
 
-def show_ui():
-    global global_updates_running
+class Interface(Thread):
+    """ The main interface for i3expod """
 
-    pygame.display.init()
-    pygame.font.init()
-    screen = pygame.display.set_mode((C.window_width, C.window_height), pygame.RESIZABLE)
-    pygame.display.set_caption('i3expo')
+    def __init__(self, conf):
+        """ Init function
 
-    total_x = screen.get_width()
-    total_y = screen.get_height()
+        Calculate various dimensions and prepopulate reusable things
 
-    pad_x = round(total_x * C.padding_percent_x / 100)
-    pad_y = round(total_y * C.padding_percent_y / 100)
+        Arguments:
+        conf -- The configuration SimpleNamespace
+        """
+        self.conf = conf
 
-    space_x = round(total_x * C.spacing_percent_x / 100)
-    space_y = round(total_y * C.spacing_percent_y / 100)
+        Thread.__init__(self)
+        pygame.display.init()
+        pygame.font.init()
 
-    shot_outer_x = round((total_x - 2 * pad_x - space_x * (C.grid_x - 1)) / C.grid_x)
-    shot_outer_y = round((total_y - 2 * pad_y - space_y * (C.grid_y - 1)) / C.grid_y)
+        self.screen = pygame.display.set_mode((self.conf.window_width, self.conf.window_height), pygame.RESIZABLE)
 
-    shot_inner_x = shot_outer_x - 2 * C.frame_width_px
-    shot_inner_y = shot_outer_y - 2 * C.frame_width_px
+        pygame.display.set_caption('i3expo')
 
-    offset_delta_x = shot_outer_x + space_x
-    offset_delta_y = shot_outer_y + space_y
+        self.total_width = self.screen.get_width()
+        self.total_height = self.screen.get_height()
 
-    screen.fill(C.bgcolor)
+        self.screen_padding_x = round(self.total_width * self.conf.padding_percent_x / 100)
+        self.screen_padding_y = round(self.total_height * self.conf.padding_percent_y / 100)
 
-    missing = pygame.Surface((150, 200), pygame.SRCALPHA, 32)
-    missing = missing.convert_alpha()
-    question_mark = pygame.font.SysFont('sans-serif', 150).render('?', True, (150, 150, 150))
-    question_mark_size = question_mark.get_rect().size
-    origin_x = round((150 - question_mark_size[0])/2)
-    origin_y = round((200 - question_mark_size[1])/2)
-    missing.blit(question_mark, (origin_x, origin_y))
+        self.tile_spacing_x = round(self.total_width * self.conf.spacing_percent_x / 100)
+        self.tile_spacing_y = round(self.total_height * self.conf.spacing_percent_y / 100)
 
-    frames = {}
+        self.tile_outer_width = round((self.total_width - 2 * self.screen_padding_x - \
+                                        self.tile_spacing_x * (self.conf.grid_x - 1)) / C.grid_x)
+        self.tile_outer_height = round((self.total_height - 2 * self.screen_padding_y - \
+                                        self.tile_spacing_y * (self.conf.grid_y - 1)) / C.grid_y)
 
-    font = pygame.font.SysFont(C.names_font, C.names_fontsize)
+        self.tile_inner_width = self.tile_outer_width - 2 * self.conf.frame_width_px
+        self.tile_inner_height = self.tile_outer_height - 2 * self.conf.frame_width_px
 
-    for iter_y in range(C.grid_y):
-        for iter_x in range(C.grid_x):
+        self.screen.fill(self.conf.bgcolor)
 
-            index = iter_y * C.grid_x + iter_x + 1
+        self.prepare_missing()
+        self.prepare_tiles()
 
-            frames[index] = {
-                'active': False,
-                'mouseoff': None,
-                'mouseon': None,
-                'ul': (None, None),
-                'br': (None, None)
-            }
+        self.show()
+        self.process_input()
 
-            if global_knowledge['active'] == index:
-                tile_color = C.tile_active_color
-                frame_color = C.frame_active_color
-                image = process_img(global_knowledge[index]['screenshot'])
-            elif index in global_knowledge.keys() and global_knowledge[index]['screenshot']:
-                tile_color = C.tile_inactive_color
-                frame_color = C.frame_inactive_color
-                image = process_img(global_knowledge[index]['screenshot'])
-            elif index in global_knowledge.keys():
-                tile_color = C.tile_unknown_color
-                frame_color = C.frame_unknown_color
-                image = missing
-            elif index <= C.workspaces:
-                tile_color = C.tile_empty_color
-                frame_color = C.frame_empty_color
-                image = None
+    def prepare_missing(self):
+        self.missing = pygame.Surface((150, 200), pygame.SRCALPHA, 32).convert_alpha()
+        question_mark = pygame.font.SysFont('sans-serif', 150).render('?', True, (150, 150, 150))
+        question_mark_size = question_mark.get_rect().size
+        origin_x = round((150 - question_mark_size[0])/2)
+        origin_y = round((200 - question_mark_size[1])/2)
+        self.missing.blit(question_mark, (origin_x, origin_y))
+
+    def prepare_tiles(self):
+        self.tiles = {}
+        for idx_x in range(self.conf.grid_x):
+            for idx_y in range(self.conf.grid_y):
+                origin_x = self.screen_padding_x + (self.tile_outer_width + self.tile_spacing_x) * idx_x
+                origin_y = self.screen_padding_y + (self.tile_outer_height + self.tile_spacing_y) * idx_y
+
+                ul = (origin_x, origin_y)
+                br = (origin_x + self.tile_outer_width, origin_y + self.tile_outer_height)
+                
+                tile = {
+                    'active': False,
+                    'mouseoff': None,
+                    'mouseon': None,
+                    'ul': ul,
+                    'br': br
+                }
+
+                self.tiles[idx_y * self.conf.grid_x + idx_x + 1] = tile
+
+    def process_img(self, raw_img):
+        """ Process an image byte array for use in PyGame
+
+        Returns:
+        pygame.image -- The screenshot
+        """
+        try:
+            pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
+        except TypeError:
+            return None
+        return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
+
+    def get_tile_data(self, index):
+        if global_knowledge['active'] == index:
+            tile_color = self.conf.tile_active_color
+            frame_color = self.conf.frame_active_color
+            image = self.process_img(global_knowledge[index]['screenshot'])
+        elif index in global_knowledge.keys() and global_knowledge[index]['screenshot']:
+            tile_color = self.conf.tile_inactive_color
+            frame_color = self.conf.frame_inactive_color
+            image = self.process_img(global_knowledge[index]['screenshot'])
+        elif index in global_knowledge.keys():
+            tile_color = self.conf.tile_unknown_color
+            frame_color = self.conf.frame_unknown_color
+            image = self.missing
+        elif index <= self.conf.workspaces:
+            tile_color = self.conf.tile_empty_color
+            frame_color = self.conf.frame_empty_color
+            image = None
+        else:
+            tile_color = self.conf.tile_nonexistant_color
+            frame_color = self.conf.frame_nonexistant_color
+            image = None
+        return tile_color, frame_color, image
+
+
+    def fit_image(self, image):
+        if self.conf.thumb_stretch:
+            image = pygame.transform.smoothscale(image, (self.tile_inner_width, self.tile_inner_height))
+            offset_x = 0
+            offset_y = 0
+        else:
+            image_size = image.get_rect().size
+            image_x = image_size[0]
+            image_y = image_size[1]
+            ratio_x = self.tile_inner_width / image_x
+            ratio_y = self.tile_inner_height / image_y
+            if ratio_x < ratio_y:
+                result_x = self.tile_inner_width
+                result_y = round(ratio_x * image_y)
+                offset_x = 0
+                offset_y = round((self.tile_inner_height - result_y) / 2)
             else:
-                tile_color = C.tile_nonexistant_color
-                frame_color = C.frame_nonexistant_color
-                image = None
+                result_x = round(ratio_y * image_x)
+                result_y = self.tile_inner_height
+                offset_x = round((self.tile_inner_width - result_x) / 2)
+                offset_y = 0
+            image = pygame.transform.smoothscale(image, (result_x, result_y))
+        return offset_x, offset_y, image
 
-            origin_x = pad_x + offset_delta_x * iter_x
-            origin_y = pad_y + offset_delta_y * iter_y
 
-            frames[index]['ul'] = (origin_x, origin_y)
-            frames[index]['br'] = (origin_x + shot_outer_x, origin_y + shot_outer_y)
+    def generate_lightmask(self, index, tile):
+        lightmask = pygame.Surface((self.tile_outer_width, self.tile_outer_height), pygame.SRCALPHA, 32)
+        lightmask.convert_alpha()
+        lightmask.fill((255, 255, 255, 255 * C.highlight_percentage / 100))
+        mouseon = tile.copy()
+        mouseon.blit(lightmask, (0, 0))
 
-            screen.fill(frame_color,
+        self.tiles[index]['mouseoff'] = tile
+        self.tiles[index]['mouseon'] = mouseon
+
+
+    def blit_tile(self, index):
+        tile_color, frame_color, image = self.get_tile_data(index)
+
+        tile = pygame.Surface((self.tile_outer_width, self.tile_outer_height)).convert_alpha()
+        tile.fill(frame_color)
+        tile.fill(tile_color,
+                    (
+                        self.conf.frame_width_px,
+                        self.conf.frame_width_px,
+                        self.tile_inner_width,
+                        self.tile_inner_height
+                    ))
+
+        if image:
+            offset_x, offset_y, image = self.fit_image(image)
+            tile.blit(image,
                         (
-                            origin_x,
-                            origin_y,
-                            shot_outer_x,
-                            shot_outer_y,
+                            self.conf.frame_width_px + offset_x,
+                            self.conf.frame_width_px + offset_y
                         ))
 
-            screen.fill(tile_color,
-                        (
-                            origin_x + C.frame_width_px,
-                            origin_y + C.frame_width_px,
-                            shot_inner_x,
-                            shot_inner_y,
-                        ))
+        self.screen.blit(tile, self.tiles[index]['ul'])
 
-            if image:
-                if C.thumb_stretch:
-                    image = pygame.transform.smoothscale(image, (shot_inner_x, shot_inner_y))
-                    offset_x = 0
-                    offset_y = 0
-                else:
-                    image_size = image.get_rect().size
-                    image_x = image_size[0]
-                    image_y = image_size[1]
-                    ratio_x = shot_inner_x / image_x
-                    ratio_y = shot_inner_y / image_y
-                    if ratio_x < ratio_y:
-                        result_x = shot_inner_x
-                        result_y = round(ratio_x * image_y)
-                        offset_x = 0
-                        offset_y = round((shot_inner_y - result_y) / 2)
-                    else:
-                        result_x = round(ratio_y * image_x)
-                        result_y = shot_inner_y
-                        offset_x = round((shot_inner_x - result_x) / 2)
-                        offset_y = 0
-                    image = pygame.transform.smoothscale(image, (result_x, result_y))
-                screen.blit(image,
-                            (
-                                origin_x + C.frame_width_px + offset_x,
-                                origin_y + C.frame_width_px + offset_y
-                            ))
+        self.generate_lightmask(index, tile)
 
-            mouseoff = screen.subsurface((origin_x, origin_y, shot_outer_x, shot_outer_y)).copy()
-            lightmask = pygame.Surface((shot_outer_x, shot_outer_y), pygame.SRCALPHA, 32)
-            lightmask.convert_alpha()
-            lightmask.fill((255, 255, 255, 255 * C.highlight_percentage / 100))
-            mouseon = mouseoff.copy()
-            mouseon.blit(lightmask, (0, 0))
+    def blit_name(self, index):
+        font = pygame.font.SysFont(self.conf.names_font, self.conf.names_fontsize)
+        defined_name = False
+        try:
+            defined_name = self.conf.workspace_names[index]
+        except KeyError:
+            pass
 
-            frames[index]['mouseon'] = mouseon.copy()
-            frames[index]['mouseoff'] = mouseoff.copy()
+        if self.conf.names_show and (index in global_knowledge.keys() or defined_name):
+            if not defined_name:
+                name = global_knowledge[index]['name']
+            else:
+                name = defined_name
+            name = font.render(name, True, self.conf.names_color)
+            name_width = name.get_rect().size[0]
+            name_x = self.tiles[index]['ul'][0] + round((self.tile_outer_width - name_width) / 2)
+            name_y = self.tiles[index]['ul'][1] + round(self.tile_outer_height * 1.02)
+            self.screen.blit(name, (name_x, name_y))
 
-            defined_name = False
-            try:
-                defined_name = C.workspace_names[index]
-            except KeyError:
-                pass
+    def show(self):
+        for iter_y in range(C.grid_y):
+            for iter_x in range(C.grid_x):
+                index = iter_y * self.conf.grid_x + iter_x + 1
+                self.blit_tile(index)
+                self.blit_name(index)
 
-            if C.names_show and (index in global_knowledge.keys() or defined_name):
-                if not defined_name:
-                    name = global_knowledge[index]['name']
-                else:
-                    name = defined_name
-                name = font.render(name, True, C.names_color)
-                name_width = name.get_rect().size[0]
-                name_x = origin_x + round((shot_outer_x - name_width) / 2)
-                name_y = origin_y + shot_outer_y + round(shot_outer_y * 0.02)
-                screen.blit(name, (name_x, name_y))
+        pygame.display.flip()
 
-    pygame.display.flip()
+    def get_hovered_tile(self, mpos):
+        """ Get the currently hovered UI tile
 
-    running = True
-    use_mouse = True
-    while running and not global_updates_running and pygame.display.get_init():
-        jump = False
-        kbdmove = (0, 0)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.MOUSEMOTION:
-                use_mouse = True
-            elif event.type == pygame.KEYDOWN:
-                use_mouse = False
+        Arguments:
+        mpos -- mouse position
 
-                if event.key == pygame.K_UP or event.key == pygame.K_k:
-                    kbdmove = (0, -1)
-                if event.key == pygame.K_DOWN or event.key == pygame.K_j:
-                    kbdmove = (0, 1)
-                if event.key == pygame.K_LEFT or event.key == pygame.K_h:
-                    kbdmove = (-1, 0)
-                if event.key == pygame.K_RIGHT or event.key == pygame.K_l:
-                    kbdmove = (1, 0)
-                if event.key == pygame.K_RETURN:
-                    jump = True
-                if event.key == pygame.K_ESCAPE:
+        Returns:
+        tile -- Hovered tile as int or None
+        """
+        for tile in self.tiles:
+            if (mpos[0] >= self.tiles[tile]['ul'][0]
+                    and mpos[0] <= self.tiles[tile]['br'][0]
+                    and mpos[1] >= self.tiles[tile]['ul'][1]
+                    and mpos[1] <= self.tiles[tile]['br'][1]):
+                return tile
+        return None
+
+    def process_input(self):
+        global global_updates_running
+
+        running = True
+        use_mouse = True
+        while running and not global_updates_running and pygame.display.get_init():
+            jump = False
+            kbdmove = (0, 0)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
-                pygame.event.clear()
-                break
+                elif event.type == pygame.MOUSEMOTION:
+                    use_mouse = True
+                elif event.type == pygame.KEYDOWN:
+                    use_mouse = False
 
-            elif event.type == pygame.MOUSEBUTTONUP:
-                use_mouse = True
-                if event.button == 1:
-                    jump = True
-                pygame.event.clear()
-                break
-
-        if use_mouse:
-            mpos = pygame.mouse.get_pos()
-            active_frame = get_hovered_tile(mpos, frames)
-        elif kbdmove != (0, 0):
-            if active_frame is None:
-                active_frame = 1
-            if kbdmove[0] != 0:
-                active_frame += kbdmove[0]
-            elif kbdmove[1] != 0:
-                active_frame += kbdmove[1] * C.grid_x
-            if active_frame > C.workspaces:
-                active_frame -= C.workspaces
-            elif active_frame < 0:
-                active_frame += C.workspaces
-
-        if jump:
-            if active_frame in global_knowledge.keys():
-                con().command('workspace ' + str(global_knowledge[active_frame]['name']))
-                break
-            if C.switch_to_empty_workspaces:
-                defined_name = False
-                try:
-                    defined_name = C.workspace_names[active_frame]
-                except KeyError:
-                    pass
-                if defined_name:
-                    con().command('workspace ' + defined_name)
+                    if event.key == pygame.K_UP or event.key == pygame.K_k:
+                        kbdmove = (0, -1)
+                    if event.key == pygame.K_DOWN or event.key == pygame.K_j:
+                        kbdmove = (0, 1)
+                    if event.key == pygame.K_LEFT or event.key == pygame.K_h:
+                        kbdmove = (-1, 0)
+                    if event.key == pygame.K_RIGHT or event.key == pygame.K_l:
+                        kbdmove = (1, 0)
+                    if event.key == pygame.K_RETURN:
+                        jump = True
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    pygame.event.clear()
                     break
 
-        for frame in frames:
-            if frames[frame]['active'] and not frame == active_frame:
-                screen.blit(frames[frame]['mouseoff'], frames[frame]['ul'])
-                frames[frame]['active'] = False
-                pygame.display.update((frames[frame]['ul'], frames[frame]['br']))
-        if active_frame and not frames[active_frame]['active']:
-            screen.blit(frames[active_frame]['mouseon'], frames[active_frame]['ul'])
-            frames[active_frame]['active'] = True
-            pygame.display.update((frames[active_frame]['ul'], frames[active_frame]['br']))
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    use_mouse = True
+                    if event.button == 1:
+                        jump = True
+                    pygame.event.clear()
+                    break
 
-        pygame.time.wait(25)
+            if use_mouse:
+                active_tile = self.get_hovered_tile(pygame.mouse.get_pos())
 
-    if not jump:
-        con().command('workspace ' + global_knowledge[global_knowledge['active']]['name'])
+            elif kbdmove != (0, 0):
+                if active_frame is None:
+                    active_frame = 1
+                if kbdmove[0] != 0:
+                    active_frame += kbdmove[0]
+                elif kbdmove[1] != 0:
+                    active_frame += kbdmove[1] * self.conf.grid_x
+                if active_frame > self.conf.workspaces:
+                    active_frame -= self.conf.workspaces
+                elif active_frame < 0:
+                    active_frame += self.conf.workspaces
 
-    pygame.display.quit()
-    pygame.display.init()
-    global_updates_running = True
+            if jump:
+                if active_tile in global_knowledge.keys():
+                    con().command('workspace ' + str(global_knowledge[active_tile]['name']))
+                    break
+                if self.conf.switch_to_empty_workspaces:
+                    defined_name = False
+                    try:
+                        defined_name = self.conf.workspace_names[active_tile]
+                    except KeyError:
+                        pass
+                    if defined_name:
+                        con().command('workspace ' + defined_name)
+                        break
+
+            for tile in self.tiles:
+                if self.tiles[tile]['active'] and not tile == active_tile:
+                    self.screen.blit(self.tiles[tile]['mouseoff'], self.tiles[tile]['ul'])
+                    self.tiles[tile]['active'] = False
+                    pygame.display.update((self.tiles[tile]['ul'], self.tiles[tile]['br']))
+            if active_tile and not self.tiles[active_tile]['active']:
+                self.screen.blit(self.tiles[active_tile]['mouseon'], self.tiles[active_tile]['ul'])
+                self.tiles[active_tile]['active'] = True
+                pygame.display.update((self.tiles[active_tile]['ul'], self.tiles[active_tile]['br']))
+
+            pygame.time.wait(25)
+
+        if not jump:
+            con().command('workspace ' + global_knowledge[global_knowledge['active']]['name'])
+
+        pygame.display.quit()
+        pygame.display.init()
+        global_updates_running = True
+
 
 if __name__ == '__main__':
-
-
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)
     signal.signal(signal.SIGHUP, signal_reload)
