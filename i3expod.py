@@ -188,10 +188,11 @@ class Updater(Thread):
 
         self._stop.wait()
 
-    def reinit(self):
+    def reset(self):
         self.log.warning('Reinitializing updater')
         self.read_config()
         self.init_knowledge()
+        self.update()
 
     def destroy(self):
         self.log.warning('Shutting down updater')
@@ -428,6 +429,11 @@ class Interface(Thread):
         self.prepare_missing()
         self.prepare_lightmask()
         self.prepare_tiles()
+
+    def reset(self):
+        self.log.warning('Resetting UI instance')
+        pygame.display.quit()
+        self.__init__(self.updater)
 
     def destroy(self):
         self.log.warning('Shutting down UI')
@@ -727,8 +733,8 @@ def sig_hup(event, stack_frame):
     del event
     del stack_frame
     logging.info('SIGHUP received')
-    updater.read_config()
-    interface.destroy()
+    updater.reset()
+    interface.reset()
 
 
 def sig_usr1(event, stack_frame):
