@@ -178,7 +178,6 @@ class Updater(Thread):
         self.con.on('window::fullscreen_mode', self.update)
         self.con.on('window::focus', self.update)
 
-
     def run(self):
         self.update()
 
@@ -371,6 +370,8 @@ class Interface(Thread):
 
     def show_ui(self):
         self.updater.lock()
+
+        self.active_tile = None
 
         self.con.command('workspace i3expo-temporary-workspace')
 
@@ -666,12 +667,14 @@ class Interface(Thread):
         return False
 
     def process_input(self):
-        use_mouse = True
+        use_mouse = False
+        pygame.event.clear()
         while self._running.is_set() and pygame.display.get_init():
             jump = False
             kbdmove = (0, 0)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    self.log.info('UI closed by i3')
                     self._running.clear()
                 elif event.type == pygame.MOUSEMOTION:
                     use_mouse = True
@@ -689,6 +692,7 @@ class Interface(Thread):
                     elif event.key == pygame.K_RETURN:
                         jump = True
                     elif event.key == pygame.K_ESCAPE:
+                        self.log.info('UI closed by Escape key')
                         self._running.clear()
                     pygame.event.clear()
                     break
