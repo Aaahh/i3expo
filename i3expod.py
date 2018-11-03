@@ -590,7 +590,7 @@ class Interface(Thread):
                     self.blit_tile(index)
                     self.blit_name(index)
 
-    def get_hovered_tile(self, mpos):
+    def get_mouse_tile(self, mpos):
         for tile in self.tiles:
             if (mpos[0] >= self.tiles[tile]['ul'][0] and
                     mpos[0] <= self.tiles[tile]['br'][0] and
@@ -598,6 +598,24 @@ class Interface(Thread):
                     mpos[1] <= self.tiles[tile]['br'][1]):
                 return tile
         return None
+
+    def get_keyboard_tile(self, kbdmove):
+        if self.active_tile is None:
+            active_tile = 1
+        else:
+            active_tile = self.active_tile
+
+        if kbdmove[0] != 0:
+            active_tile += kbdmove[0]
+        elif kbdmove[1] != 0:
+            active_tile += kbdmove[1] * self.conf.grid_x
+
+        if active_tile > self.conf.workspaces:
+            return active_tile - self.conf.workspaces
+        elif active_tile <= 0:
+            return active_tile + self.conf.workspaces
+        else:
+            return active_tile
 
     def update_ui(self):
         for tile in self.tiles:
@@ -669,19 +687,10 @@ class Interface(Thread):
                     break
 
             if use_mouse:
-                self.active_tile = self.get_hovered_tile(pygame.mouse.get_pos())
+                self.active_tile = self.get_mouse_tile(pygame.mouse.get_pos())
 
             elif kbdmove != (0, 0):
-                if self.active_tile is None:
-                    self.active_tile = 1
-                if kbdmove[0] != 0:
-                    self.active_tile += kbdmove[0]
-                elif kbdmove[1] != 0:
-                    self.active_tile += kbdmove[1] * self.conf.grid_x
-                if self.active_tile > self.conf.workspaces:
-                    self.active_tile -= self.conf.workspaces
-                elif self.active_tile < 0:
-                    self.active_tile += self.conf.workspaces
+                self.active_tile = self.get_keyboard_tile(kbdmove)
 
             if jump and self.do_jump():
                 break
