@@ -2,3 +2,5 @@ prtscn.so
 *.swp
 __pycache__
 todo-pre-merge
+__init__.py
+i3expod.log
