@@ -226,21 +226,22 @@ class Updater(Thread):
         self.start_timer(quiet=True)
 
     def data_older_than(self, what):
-        old = time.time() - self.knowledge[self.active_workspace]['last-update'] > what
+        old = self.knowledge[self.active_workspace]['screenshot'] is None or \
+                time.time() - self.knowledge[self.active_workspace]['last-update'] > what
         self.log.debug('Screenshot data for workspace %s is%solder than %ss',
                        self.active_workspace, (' not ' if not old else ' '), what)
         return old
 
     def update(self, ipc=None, stack_frame=None):
-        try:
+        if stack_frame is None:
+            self.log.debug('Update check triggered manually')
+        else:
             if stack_frame.container.window_class in BLACKLIST:
                 self.log.debug('Update check from %s discarded',
                                stack_frame.container.window_class)
                 return False
             self.log.debug('Update check triggered by %s: %s',
                            stack_frame.change, stack_frame.container.window_class)
-        except AttributeError:
-            self.log.debug('Update check triggered manually')
         del ipc
 
         self._running.wait()
@@ -267,8 +268,9 @@ class Updater(Thread):
            self.data_older_than(self.conf.forced_update_interval_sec):
             self.log.debug('Fetching update data for workspace %s', self.active_workspace)
             screenshot = self.grab_screen()
-            self.knowledge[self.active_workspace]['screenshot'] = screenshot
-            self.knowledge[self.active_workspace]['last-update'] = time.time()
+            if self._running.is_set():
+                self.knowledge[self.active_workspace]['screenshot'] = screenshot
+                self.knowledge[self.active_workspace]['last-update'] = time.time()
 
         self.set_new_update_timer()
         return True
