@@ -141,6 +141,19 @@ def read_config():
     return conf
 
 
+def lockable(f):
+    def wrapper(*args, **kwargs):
+        if not wrapper.locked:
+            wrapper.locked = True
+            ret = f(*args, **kwargs)
+            wrapper.locked = False
+            return ret
+        else:
+            logging.debug('Function %s locked, canceling', f.__name__)
+    wrapper.locked = False
+    return wrapper
+
+
 class Updater(Thread):
     def __init__(self):
         Thread.__init__(self)
@@ -232,6 +245,7 @@ class Updater(Thread):
                        self.active_workspace, (' not ' if not old else ' '), what)
         return old
 
+    @lockable
     def update(self, ipc=None, stack_frame=None):
         if stack_frame is None:
             self.log.debug('Update check triggered manually')
