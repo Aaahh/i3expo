@@ -73,13 +73,15 @@ or worse.
 
 # Bugs
 
-Stalled windows whose content i3 doesn't know cause interface bugs and could
+- i3 sometimes hangs with 100% CPU use after frequent expo use
+- Stalled windows whose content i3 doesn't know cause interface bugs and could
 probably be handled better, but this needs more testing.
 
 # Todo
 
 - Multimonitor compatibility
-- Save UI state between display toggle
+- Optimize Interface performance
+- Re-implement @laur891's gridless approach
 
 # Credit
 

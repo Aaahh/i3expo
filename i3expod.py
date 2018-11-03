@@ -8,7 +8,6 @@ import sys
 import time
 import logging
 from types import SimpleNamespace
-from functools import partial
 from threading import Thread, Event, Timer
 
 import pygame
@@ -23,62 +22,63 @@ GRAB = ctypes.CDLL(SCREENSHOT_LIB_PATH)
 GRAB.getScreen.argtypes = []
 BLACKLIST = ['i3expod.py', None]
 
-logging.basicConfig(format='%(asctime)s.%(msecs)03d - %(name)4s %(levelname)-8s: %(message)s', datefmt='%T', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s.%(msecs)03d - %(name)4s %(levelname)-8s: %(message)s',
+                    datefmt='%T', level=logging.DEBUG)
 
 pygame.display.init()
 DEFAULTS = {
-        'Capture': {
-            'screenshot_width'           : pygame.display.Info().current_w,
-            'screenshot_height'          : pygame.display.Info().current_h,
-            'screenshot_offset_x'        : 0,
-            'screenshot_offset_y'        : 0,
-            'forced_update_interval_sec' : 5.0,
-            'min_update_interval_sec'    : 0.5
-        },
+    'Capture': {
+        'screenshot_width':            pygame.display.Info().current_w,
+        'screenshot_height':           pygame.display.Info().current_h,
+        'screenshot_offset_x':         0,
+        'screenshot_offset_y':         0,
+        'forced_update_interval_sec':  5.0,
+        'min_update_interval_sec':     0.5
+    },
 
-        'UI': {
-            'window_width'               : pygame.display.Info().current_w,
-            'window_height'              : pygame.display.Info().current_h,
-            'workspaces'                 : 9,
-            'grid_x'                     : 3,
-            'grid_y'                     : 3,
-            'padding_percent_x'          : 5,
-            'padding_percent_y'          : 5,
-            'spacing_percent_x'          : 5,
-            'spacing_percent_y'          : 5,
-            'frame_width_px'             : 5,
-            'highlight_percentage'       : 20
-        },
+    'UI': {
+        'window_width':                pygame.display.Info().current_w,
+        'window_height':               pygame.display.Info().current_h,
+        'workspaces':                  9,
+        'grid_x':                      3,
+        'grid_y':                      3,
+        'padding_percent_x':           5,
+        'padding_percent_y':           5,
+        'spacing_percent_x':           5,
+        'spacing_percent_y':           5,
+        'frame_width_px':              5,
+        'highlight_percentage':        20
+    },
 
-        'Colors': {
-            'bgcolor'                    : 'gray20',
-            'frame_active_color'         : '#3b4f8a',
-            'frame_inactive_color'       : '#43747b',
-            'frame_unknown_color'        : '#c8986b',
-            'frame_empty_color'          : 'gray60',
-            'frame_nonexistant_color'    : 'gray30',
-            'tile_active_color'          : '#5a6da4',
-            'tile_inactive_color'        : '#93afb3',
-            'tile_unknown_color'         : '#ffe6d0',
-            'tile_empty_color'           : 'gray80',
-            'tile_nonexistant_color'     : 'gray40',
-            'names_color'                : 'white'
-        },
+    'Colors': {
+        'bgcolor':                     'gray20',
+        'frame_active_color':          '#3b4f8a',
+        'frame_inactive_color':        '#43747b',
+        'frame_unknown_color':         '#c8986b',
+        'frame_empty_color':           'gray60',
+        'frame_nonexistant_color':     'gray30',
+        'tile_active_color':           '#5a6da4',
+        'tile_inactive_color':         '#93afb3',
+        'tile_unknown_color':          '#ffe6d0',
+        'tile_empty_color':            'gray80',
+        'tile_nonexistant_color':      'gray40',
+        'names_color':                 'white'
+    },
 
-        'Fonts': {
-            'names_font'                 : 'sans-serif',
-            'names_fontsize'             : 25
-        },
+    'Fonts': {
+        'names_font':                  'sans-serif',
+        'names_fontsize':              25
+    },
 
-        'Flags': {
-            'names_show'                 : True,
-            'thumb_stretch'              : False,
-            'switch_to_empty_workspaces' : False
-        },
+    'Flags': {
+        'names_show':                  True,
+        'thumb_stretch':               False,
+        'switch_to_empty_workspaces':  False
+    },
 
-        'Workspaces': {
-        }
+    'Workspaces': {
     }
+}
 pygame.display.quit()
 
 
@@ -107,13 +107,13 @@ def read_config():
     config.read_dict(DEFAULTS)
 
     if os.path.exists(CONFIG_FILE):
-        logging.info('Read config file in ' + CONFIG_FILE)
+        logging.info('Read config file in %s', CONFIG_FILE)
         config.read(CONFIG_FILE)
     else:
         root_dir = os.path.dirname(CONFIG_FILE)
         if not os.path.exists(root_dir):
             os.makedirs(root_dir)
-        logging.warning('Config file in ' + CONFIG_FILE + ' missing, created with defaults')
+        logging.warning('Config file in %s missing, created with defaults', CONFIG_FILE)
         with open(CONFIG_FILE, 'w') as config_file:
             config.write(config_file)
 
@@ -148,12 +148,15 @@ class Updater(Thread):
 
         self.log = logging.getLogger('updt')
 
+        self.active_workspace = None
+
         self.con = i3ipc.Connection()
         self.read_config()
         self.init_knowledge()
 
         self._running = Event()
         self._running.set()
+        self._stop = Event()
 
         self.start_timer()
 
@@ -161,8 +164,6 @@ class Updater(Thread):
         self.con.on('window::floating', self.update)
         self.con.on('window::fullscreen_mode', self.update)
         self.con.on('window::focus', self.update)
-
-        self._stop = Event()
 
 
     def run(self):
@@ -175,28 +176,26 @@ class Updater(Thread):
 
         self._stop.wait()
 
-
     def reinit(self):
         self.log.warning('Reinitializing updater')
         self.read_config()
         self.init_knowledge()
-
 
     def destroy(self):
         self.log.warning('Shutting down updater')
         self.con.main_quit()
         self._stop.set()
 
-
     def init_workspace(self, workspace):
         self.knowledge[workspace.num] = {
-            'name'        : workspace.name,
-            'screenshot'  : None,
-            'last-update' : 0.0,
-            'state'       : ()
+            'name':         workspace.name,
+            'screenshot':   None,
+            'last-update':  0.0,
+            'state':        ()
         }
         for cont in workspace.leaves():
-            self.knowledge[workspace.num]['state'] += ((cont.id, cont.rect.x, cont.rect.y, cont.rect.width, cont.rect.height),)
+            self.knowledge[workspace.num]['state'] += \
+                    ((cont.id, cont.rect.x, cont.rect.y, cont.rect.width, cont.rect.height),)
 
     def init_knowledge(self):
         self.log.info('Initializing workspace knowledge')
@@ -206,7 +205,6 @@ class Updater(Thread):
                 self.init_workspace(workspace)
 
         self.active_workspace = self.con.get_tree().find_focused().workspace().num
-
 
     def stop_timer(self, quiet=False):
         if not quiet:
@@ -219,7 +217,7 @@ class Updater(Thread):
     def start_timer(self, quiet=False):
         if not quiet:
             self.log.info('Starting forced background updates')
-        self.timer = Timer(self.conf.forced_update_interval_sec, partial(self.update, force=True))
+        self.timer = Timer(self.conf.forced_update_interval_sec, self.update)
         self.timer.start()
 
     def set_new_update_timer(self):
@@ -229,25 +227,26 @@ class Updater(Thread):
 
     def data_older_than(self, what):
         old = time.time() - self.knowledge[self.active_workspace]['last-update'] > what
-        self.log.debug('Screenshot data for workspace ' + str(self.active_workspace) + ' is' + (' not ' if not old else ' ') + 'older than ' + str(what) + 's')
-        return old 
+        self.log.debug('Screenshot data for workspace %s is%solder than %ss',
+                       self.active_workspace, (' not ' if not old else ' '), what)
+        return old
 
-    #def window_not_blacklisted(self):
-    #    focused_class = self.con.get_tree().find_focused().window_class 
-    #    not_blacklisted = focused_class not in BLACKLIST
-    #    self.log.debug('Focused window is ' + str(focused_class) + ' and ' + ('not blacklisted' if not_blacklisted else 'blacklisted' ))
-    #    return not_blacklisted
-
-    def update(self, ipc = None, stack_frame = None, force=False):
+    def update(self, ipc=None, stack_frame=None):
         try:
             if stack_frame.container.window_class in BLACKLIST:
-                self.log.debug('Update check from ' + stack_frame.container.window_class + ' discarded')
+                self.log.debug('Update check from %s discarded',
+                               stack_frame.container.window_class)
                 return False
-            self.log.debug('Update check triggered by ' + stack_frame.change + ': ' + stack_frame.container.window_class)
+            self.log.debug('Update check triggered by %s: %s',
+                           stack_frame.change, stack_frame.container.window_class)
         except AttributeError:
             self.log.debug('Update check triggered manually')
+        del ipc
 
         self._running.wait()
+
+        if not self.data_older_than(self.conf.min_update_interval_sec):
+            return False
 
         tree = self.con.get_tree()
         workspace = tree.find_focused().workspace()
@@ -264,51 +263,15 @@ class Updater(Thread):
         for item in deleted:
             del self.knowledge[item]
 
-        if self.data_older_than(self.conf.min_update_interval_sec) and (self.active_workspace_state_has_changed() or self.data_older_than(self.conf.forced_update_interval_sec)):
-            self.log.debug('Fetching update data for workspace ' + str(self.active_workspace))
+        if self.active_workspace_state_has_changed() or \
+           self.data_older_than(self.conf.forced_update_interval_sec):
+            self.log.debug('Fetching update data for workspace %s', self.active_workspace)
             screenshot = self.grab_screen()
             self.knowledge[self.active_workspace]['screenshot'] = screenshot
             self.knowledge[self.active_workspace]['last-update'] = time.time()
 
         self.set_new_update_timer()
-
-
-    #def update(self, event = None, stack_frame = None, force=False):
-    #    del event
-    #    del stack_frame
-    #    self.log.debug('Update check triggered')
-
-    #    self._running.wait()
-
-    #    tree = self.con.get_tree()
-    #    workspace = tree.find_focused().workspace()
-    #    self.active_workspace = workspace.num
-
-    #    if self.active_workspace not in self.knowledge.keys():
-    #        self.init_workspace(workspace)
-
-    #    wspace_nums = [w.num for w in tree.workspaces()]
-    #    deleted = []
-    #    for item in self.knowledge:
-    #        if item not in wspace_nums:
-    #            deleted.append(item)
-    #    for item in deleted:
-    #        del self.knowledge[item]
-
-    #    self.log.debug('Cleaned up workspace knowledge')
-
-    #    if self.data_older_than(self.conf.min_update_interval_sec) and self.window_not_blacklisted() and (self.active_workspace_state_has_changed() or self.data_older_than(self.conf.forced_update_interval_sec)):
-    #        self.log.debug('Fetching update data for workspace ' + str(self.active_workspace))
-    #        screenshot = self.grab_screen()
-    #        if self._running.is_set() and self.window_not_blacklisted():
-    #            self.log.debug('Committing update data for workspace ' + str(self.active_workspace))
-    #            self.knowledge[self.active_workspace]['screenshot'] = screenshot
-    #            self.knowledge[self.active_workspace]['last-update'] = time.time()
-    #        else:
-    #            self.log.debug('Update data invalidated')
-
-    #    self.set_new_update_timer()
-            
+        return True
 
     def active_workspace_state_has_changed(self):
         state = ()
@@ -316,21 +279,19 @@ class Updater(Thread):
             state += ((cont.id, cont.rect.x, cont.rect.y, cont.rect.width, cont.rect.height),)
 
         if self.knowledge[self.active_workspace]['state'] == state:
-            self.log.debug('Workspace ' + str(self.active_workspace) + ' has not changed')
+            self.log.debug('Workspace %s has not changed', self.active_workspace)
             return False
 
         self.knowledge[self.active_workspace]['state'] = state
-        self.log.debug('Workspace ' + str(self.active_workspace) + ' has changed')
+        self.log.debug('Workspace %s has changed', self.active_workspace)
         return True
-
 
     def read_config(self):
         self.log.warning('Reading config file')
         self.conf = read_config()
 
-
     def grab_screen(self):
-        self.log.debug('Taking a screenshot, probably of workspace ' + str(self.active_workspace))
+        self.log.debug('Taking a screenshot, probably of workspace %s', self.active_workspace)
 
         width = self.conf.screenshot_width - self.conf.screenshot_offset_x
         height = self.conf.screenshot_height - self.conf.screenshot_offset_y
@@ -339,31 +300,31 @@ class Updater(Thread):
 
         result = (ctypes.c_ubyte * objlength)()
 
-        GRAB.getScreen(self.conf.screenshot_offset_x, self.conf.screenshot_offset_y, width, height, result)
-        self.log.debug('Screenshot taken, probably of workspace ' + str(self.active_workspace))
+        GRAB.getScreen(self.conf.screenshot_offset_x, self.conf.screenshot_offset_y,
+                       width, height, result)
+        self.log.debug('Screenshot taken, probably of workspace %s', self.active_workspace)
         return (width, height, result)
 
     def lock(self):
         self._running.clear()
+        self.log.info('Pausing updater')
 
     def unlock(self):
         self._running.set()
         self.set_new_update_timer()
+        self.log.info('Starting updater')
 
-    #def toggle(self):
-    #    if not self._running.is_set():
-    #        self._lock.wait()
-    #        self._running.set()
-    #        self.set_new_update_timer()
-    #        self.log.info('Starting updater')
-    #    else:
-    #        self._running.clear()
-    #        self.log.info('Pausing updater')
+
+def process_img(raw_img):
+    try:
+        pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
+    except TypeError:
+        return None
+    return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
 class Interface(Thread):
-
-    def __init__(self, updater):
+    def __init__(self, updater_instance):
         Thread.__init__(self)
         self.daemon = True
 
@@ -371,59 +332,52 @@ class Interface(Thread):
 
         self.read_config()
         self.con = i3ipc.Connection()
-        self.updater = updater
+        self.updater = updater_instance
 
         self._running = Event()
-        self._running.clear()
-
         self._stop = Event()
 
         self.last_shown = -1
 
-        self.screen_image = pygame.Surface((self.conf.window_width, self.conf.window_height))
+        self.windowsize = (self.conf.window_width, self.conf.window_height)
+        self.screen_image = pygame.Surface(self.windowsize)
+        self.screen = None
 
+        self.tiles = {}
+        self.active_tile = None
+        self.missing = None
+        self.lightmask = None
+
+        self.prepare_ui()
 
     def run(self):
         self._stop.wait()
-
 
     def show_ui(self):
         self.updater.lock()
 
         self.con.command('workspace i3expo-temporary-workspace')
 
-        if self.last_shown < 0:
-            self.prepare_ui()
         self.blit_changes()
 
         self.log.info('UI updated')
 
-        self.screen = pygame.display.set_mode((self.conf.window_width, self.conf.window_height), pygame.RESIZABLE)
+        self.screen = pygame.display.set_mode(self.windowsize, pygame.RESIZABLE)
         pygame.display.set_caption('i3expo')
-        self.screen.blit(self.screen_image.convert_alpha(), (0,0))
+        self.screen.blit(self.screen_image.convert_alpha(), (0, 0))
         pygame.display.flip()
-
-        self.log.info('UI displayed')
-
-        tree = self.con.get_tree()
-        
-
         self.last_shown = time.time()
-
-        self.log.debug('Pygame window drawn')
+        self.log.info('UI displayed')
 
         self.process_input()
 
+        self._running.clear()
         self.log.debug('Pygame input processed')
 
-        self._running.clear()
-
         pygame.display.quit()
-        time.sleep(0.1) # TODO: Get rid of this
+        time.sleep(0.1)  # TODO: Get rid of this - how?
         self.log.debug('Pygame window closed')
         self.updater.unlock()
-
-    
 
     def prepare_ui(self):
         self.log.warning('Preparing UI')
@@ -431,8 +385,8 @@ class Interface(Thread):
         pygame.display.init()
         pygame.font.init()
 
-        self.total_width = self.screen_image.get_width()
-        self.total_height = self.screen_image.get_height()
+        self.total_width = self.windowsize[0]
+        self.total_height = self.windowsize[1]
 
         self.screen_padding_x = round(self.total_width * self.conf.padding_percent_x / 100)
         self.screen_padding_y = round(self.total_height * self.conf.padding_percent_y / 100)
@@ -440,13 +394,17 @@ class Interface(Thread):
         self.tile_spacing_x = round(self.total_width * self.conf.spacing_percent_x / 100)
         self.tile_spacing_y = round(self.total_height * self.conf.spacing_percent_y / 100)
 
-        self.tile_outer_width = round((self.total_width - 2 * self.screen_padding_x - \
-                                        self.tile_spacing_x * (self.conf.grid_x - 1)) / self.conf.grid_x)
-        self.tile_outer_height = round((self.total_height - 2 * self.screen_padding_y - \
-                                        self.tile_spacing_y * (self.conf.grid_y - 1)) / self.conf.grid_y)
+        self.tile_outer_width = round((self.total_width - 2 * self.screen_padding_x -
+                                       self.tile_spacing_x * (self.conf.grid_x - 1)) /
+                                      self.conf.grid_x)
+        self.tile_outer_height = round((self.total_height - 2 * self.screen_padding_y -
+                                        self.tile_spacing_y * (self.conf.grid_y - 1)) /
+                                       self.conf.grid_y)
+        self.tile_outer_size = (self.tile_outer_width, self.tile_outer_height)
 
         self.tile_inner_width = self.tile_outer_width - 2 * self.conf.frame_width_px
         self.tile_inner_height = self.tile_outer_height - 2 * self.conf.frame_width_px
+        self.tile_inner_size = (self.tile_inner_width, self.tile_inner_height)
 
         self.screen_image.fill(self.conf.bgcolor)
 
@@ -454,11 +412,9 @@ class Interface(Thread):
         self.prepare_lightmask()
         self.prepare_tiles()
 
-
     def destroy(self):
         self.log.warning('Shutting down UI')
         self._stop.set()
-
 
     def toggle(self):
         if self._running.is_set():
@@ -469,11 +425,9 @@ class Interface(Thread):
             self._running.set()
             self.show_ui()
 
-
     def read_config(self):
         self.log.info('Reading config file')
         self.conf = read_config()
-
 
     def prepare_missing(self):
         self.log.debug('Preparing "Screenshot missing" icon')
@@ -484,63 +438,62 @@ class Interface(Thread):
         origin_y = round((200 - question_mark_size[1])/2)
         self.missing.blit(question_mark, (origin_x, origin_y))
 
-
     def prepare_tiles(self):
         self.log.debug('Preparing UI tiles')
-        self.tiles = {}
         for idx_x in range(self.conf.grid_x):
             for idx_y in range(self.conf.grid_y):
-                origin_x = self.screen_padding_x + (self.tile_outer_width + self.tile_spacing_x) * idx_x
-                origin_y = self.screen_padding_y + (self.tile_outer_height + self.tile_spacing_y) * idx_y
+                origin_x = (self.screen_padding_x +
+                            (self.tile_outer_width + self.tile_spacing_x) * idx_x)
+                origin_y = (self.screen_padding_y +
+                            (self.tile_outer_height + self.tile_spacing_y) * idx_y)
 
-                ul = (origin_x, origin_y)
-                br = (origin_x + self.tile_outer_width, origin_y + self.tile_outer_height)
-                
+                u_l = (origin_x, origin_y)
+                b_r = (origin_x + self.tile_outer_width, origin_y + self.tile_outer_height)
+
                 tile = {
                     'active': False,
                     'mouseoff': None,
                     'mouseon': None,
-                    'ul': ul,
-                    'br': br,
+                    'ul': u_l,
+                    'br': b_r,
                     'drawn': False
                 }
 
                 self.tiles[idx_y * self.conf.grid_x + idx_x + 1] = tile
 
-    def process_img(self, raw_img):
-        try:
-            pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
-        except TypeError:
-            return None
-        return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
-
     def get_tile_data(self, index):
-        if self.updater.active_workspace == index and self.updater.knowledge[index]['screenshot'] and self.updater.knowledge[index]['state']:
-            tile_color = self.conf.tile_active_color
-            frame_color = self.conf.frame_active_color
-            image = self.process_img(self.updater.knowledge[index]['screenshot'])
-        elif index in self.updater.knowledge.keys() and self.updater.knowledge[index]['screenshot'] and self.updater.knowledge[index]['state']:
-            tile_color = self.conf.tile_inactive_color
-            frame_color = self.conf.frame_inactive_color
-            image = self.process_img(self.updater.knowledge[index]['screenshot'])
-        elif index in self.updater.knowledge.keys() and self.updater.knowledge[index]['state']:
-            tile_color = self.conf.tile_unknown_color
-            frame_color = self.conf.frame_unknown_color
-            image = self.missing
-        elif index <= self.conf.workspaces:
-            tile_color = self.conf.tile_empty_color
-            frame_color = self.conf.frame_empty_color
-            image = None
-        else:
-            tile_color = self.conf.tile_nonexistant_color
-            frame_color = self.conf.frame_nonexistant_color
-            image = None
-        return tile_color, frame_color, image
+        tile_color = None
+        frame_color = None
+        image = None
 
+        if index in self.updater.knowledge.keys() and self.updater.knowledge[index]['state']:
+            if self.updater.knowledge[index]['screenshot']:
+                if self.updater.active_workspace == index:
+                    tile_color = self.conf.tile_active_color
+                    frame_color = self.conf.frame_active_color
+                    image = process_img(self.updater.knowledge[index]['screenshot'])
+                else:
+                    tile_color = self.conf.tile_inactive_color
+                    frame_color = self.conf.frame_inactive_color
+                    image = process_img(self.updater.knowledge[index]['screenshot'])
+            else:
+                tile_color = self.conf.tile_unknown_color
+                frame_color = self.conf.frame_unknown_color
+                image = self.missing
+        else:
+            if index <= self.conf.workspaces:
+                tile_color = self.conf.tile_empty_color
+                frame_color = self.conf.frame_empty_color
+                image = None
+            else:
+                tile_color = self.conf.tile_nonexistant_color
+                frame_color = self.conf.frame_nonexistant_color
+                image = None
+        return tile_color, frame_color, image
 
     def fit_image(self, image):
         if self.conf.thumb_stretch:
-            image = pygame.transform.smoothscale(image, (self.tile_inner_width, self.tile_inner_height))
+            image = pygame.transform.smoothscale(image, self.tile_inner_size)
             offset_x = 0
             offset_y = 0
         else:
@@ -562,39 +515,36 @@ class Interface(Thread):
             image = pygame.transform.smoothscale(image, (result_x, result_y))
         return offset_x, offset_y, image
 
-
     def prepare_lightmask(self):
-        self.lightmask = pygame.Surface((self.tile_outer_width, self.tile_outer_height), pygame.SRCALPHA, 32)
+        self.lightmask = pygame.Surface(self.tile_outer_size, pygame.SRCALPHA, 32)
         self.lightmask.fill((255, 255, 255, 255 * self.conf.highlight_percentage / 100))
-
 
     def generate_lightmask(self, index):
         mouseon = self.tiles[index]['mouseoff'].copy()
         mouseon.blit(self.lightmask, (0, 0))
         self.tiles[index]['mouseon'] = mouseon
 
-
     def blit_tile(self, index):
-        self.log.debug('Blitting tile ' + str(index))
+        self.log.debug('Blitting tile %s', index)
         tile_color, frame_color, image = self.get_tile_data(index)
 
         tile = pygame.Surface((self.tile_outer_width, self.tile_outer_height))
         tile.fill(frame_color)
         tile.fill(tile_color,
-                    (
-                        self.conf.frame_width_px,
-                        self.conf.frame_width_px,
-                        self.tile_inner_width,
-                        self.tile_inner_height
-                    ))
+                  (
+                      self.conf.frame_width_px,
+                      self.conf.frame_width_px,
+                      self.tile_inner_width,
+                      self.tile_inner_height
+                  ))
 
         if image:
             offset_x, offset_y, image = self.fit_image(image)
             tile.blit(image,
-                        (
-                            self.conf.frame_width_px + offset_x,
-                            self.conf.frame_width_px + offset_y
-                        ))
+                      (
+                          self.conf.frame_width_px + offset_x,
+                          self.conf.frame_width_px + offset_y
+                      ))
 
         self.tiles[index]['mouseoff'] = tile
         self.screen_image.blit(tile, self.tiles[index]['ul'])
@@ -614,7 +564,7 @@ class Interface(Thread):
             else:
                 name = defined_name
 
-            self.log.debug('Blitting name ' + str(index) + ': ' + name)
+            self.log.debug('Blitting name %s: %s', index, name)
 
             name = font.render(name, True, self.conf.names_color)
             name_width = name.get_rect().size[0]
@@ -627,35 +577,47 @@ class Interface(Thread):
         for iter_y in range(self.conf.grid_y):
             for iter_x in range(self.conf.grid_x):
                 index = iter_y * self.conf.grid_x + iter_x + 1
-                if (self.last_shown < 0 and index not in self.updater.knowledge.keys()) or (index in self.updater.knowledge.keys() and self.updater.knowledge[index]['last-update'] > self.last_shown) or (index not in self.updater.knowledge.keys() and self.tiles[index]['drawn']):
+                blit = False
+                if index not in self.updater.knowledge.keys():
+                    if self.last_shown < 0 or self.tiles[index]['drawn']:
+                        blit = True
+                else:
+                    if self.updater.knowledge[index]['last-update'] > self.last_shown:
+                        blit = True
+                if blit:
                     self.blit_tile(index)
                     self.blit_name(index)
 
-
     def get_hovered_tile(self, mpos):
         for tile in self.tiles:
-            if (mpos[0] >= self.tiles[tile]['ul'][0]
-                    and mpos[0] <= self.tiles[tile]['br'][0]
-                    and mpos[1] >= self.tiles[tile]['ul'][1]
-                    and mpos[1] <= self.tiles[tile]['br'][1]):
+            if (mpos[0] >= self.tiles[tile]['ul'][0] and
+                    mpos[0] <= self.tiles[tile]['br'][0] and
+                    mpos[1] >= self.tiles[tile]['ul'][1] and
+                    mpos[1] <= self.tiles[tile]['br'][1]):
                 return tile
         return None
 
     def update_ui(self):
         for tile in self.tiles:
             if self.tiles[tile]['active'] and not tile == self.active_tile:
-                self.screen.blit(self.tiles[tile]['mouseoff'], self.tiles[tile]['ul'])
+                self.screen.blit(self.tiles[tile]['mouseoff'],
+                                 self.tiles[tile]['ul'])
                 self.tiles[tile]['active'] = False
-                pygame.display.update((self.tiles[tile]['ul'], self.tiles[tile]['br']))
+                pygame.display.update((self.tiles[tile]['ul'],
+                                       self.tiles[tile]['br']))
+
         if self.active_tile and not self.tiles[self.active_tile]['active']:
-            self.screen.blit(self.tiles[self.active_tile]['mouseon'], self.tiles[self.active_tile]['ul'])
+            self.screen.blit(self.tiles[self.active_tile]['mouseon'],
+                             self.tiles[self.active_tile]['ul'])
             self.tiles[self.active_tile]['active'] = True
-            pygame.display.update((self.tiles[self.active_tile]['ul'], self.tiles[self.active_tile]['br']))
+            pygame.display.update((self.tiles[self.active_tile]['ul'],
+                                   self.tiles[self.active_tile]['br']))
 
     def do_jump(self):
         if self.active_tile in self.updater.knowledge.keys():
             self.con.command('workspace ' + str(self.updater.knowledge[self.active_tile]['name']))
-            self.log.info('Switching to known workspace ' + str(self.updater.knowledge[self.active_tile]['name'])) 
+            self.log.info('Switching to known workspace %s',
+                          self.updater.knowledge[self.active_tile]['name'])
             return True
         if self.conf.switch_to_empty_workspaces:
             defined_name = False
@@ -665,7 +627,7 @@ class Interface(Thread):
                 pass
             if defined_name:
                 self.con.command('workspace ' + defined_name)
-                self.log.info('Switching to predefined workspace ' + defined_name)
+                self.log.info('Switching to predefined workspace %s', defined_name)
                 return True
         return False
 
@@ -684,15 +646,15 @@ class Interface(Thread):
 
                     if event.key == pygame.K_UP or event.key == pygame.K_k:
                         kbdmove = (0, -1)
-                    if event.key == pygame.K_DOWN or event.key == pygame.K_j:
+                    elif event.key == pygame.K_DOWN or event.key == pygame.K_j:
                         kbdmove = (0, 1)
-                    if event.key == pygame.K_LEFT or event.key == pygame.K_h:
+                    elif event.key == pygame.K_LEFT or event.key == pygame.K_h:
                         kbdmove = (-1, 0)
-                    if event.key == pygame.K_RIGHT or event.key == pygame.K_l:
+                    elif event.key == pygame.K_RIGHT or event.key == pygame.K_l:
                         kbdmove = (1, 0)
-                    if event.key == pygame.K_RETURN:
+                    elif event.key == pygame.K_RETURN:
                         jump = True
-                    if event.key == pygame.K_ESCAPE:
+                    elif event.key == pygame.K_ESCAPE:
                         self._running.clear()
                     pygame.event.clear()
                     break
@@ -719,16 +681,17 @@ class Interface(Thread):
                 elif self.active_tile < 0:
                     self.active_tile += self.conf.workspaces
 
-            if jump:
-                if self.do_jump():
-                    break
+            if jump and self.do_jump():
+                break
 
             self.update_ui()
             pygame.time.wait(25)
 
         if not jump:
-            self.log.info('Selection canceled, jumping to last active workspace ' + self.updater.knowledge[self.updater.active_workspace]['name'])
-            self.con.command('workspace ' + self.updater.knowledge[self.updater.active_workspace]['name'])
+            self.log.info('Selection canceled, jumping to last active workspace %s',
+                          self.updater.knowledge[self.updater.active_workspace]['name'])
+            self.con.command('workspace ' +
+                             self.updater.knowledge[self.updater.active_workspace]['name'])
 
 
 def sig_hup(event, stack_frame):
@@ -738,12 +701,13 @@ def sig_hup(event, stack_frame):
     updater.read_config()
     interface.destroy()
 
+
 def sig_usr1(event, stack_frame):
     del event
     del stack_frame
     logging.info('SIGUSR1 received')
-    #updater.toggle()
     interface.toggle()
+
 
 def sig_int(event, stack_frame):
     del event
@@ -754,8 +718,8 @@ def sig_int(event, stack_frame):
     logging.warning('Shutting down')
     sys.exit(0)
 
-if __name__ == '__main__':
 
+if __name__ == '__main__':
     signal.signal(signal.SIGHUP, sig_hup)
     signal.signal(signal.SIGUSR1, sig_usr1)
     signal.signal(signal.SIGINT, sig_int)
