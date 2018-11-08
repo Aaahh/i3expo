@@ -8,7 +8,7 @@ import pygame
 import i3ipc
 from PIL import Image
 
-from config import read_config
+from config import CONF
 
 LOG = logging.getLogger('intf')
 
@@ -22,27 +22,22 @@ def process_img(raw_img):
 
 
 class Interface(Thread):
-    def __init__(self, updater_instance):
+    def __init__(self, workspaces_instance, updater_instance):
         Thread.__init__(self)
         self.daemon = True
 
-        self.read_config()
         self.con = i3ipc.Connection()
         self.updater = updater_instance
+        self.workspaces = workspaces_instance
 
         self._running = Event()
         self._stop = Event()
 
-        self.last_shown = -1
+        self.last_shown = None
+        self.drawn = {}
 
-        self.windowsize = (self.conf.window_width, self.conf.window_height)
-        self.screen_image = pygame.Surface(self.windowsize)
+        self.screen_image = pygame.Surface(CONF.window_dim)
         self.screen = None
-
-        self.tiles = {}
-        self.active_tile = None
-        self.missing = None
-        self.lightmask = None
 
         self.prepare_ui()
 
@@ -60,9 +55,9 @@ class Interface(Thread):
 
         LOG.info('UI updated')
 
-        self.screen = pygame.display.set_mode(self.windowsize, pygame.RESIZABLE)
+        self.screen = pygame.display.set_mode(CONF.window_dim, pygame.RESIZABLE)
         pygame.display.set_caption('i3expo')
-        self.screen.blit(self.screen_image.convert_alpha(), (0, 0))
+        self.screen.blit(self.screen_image.convert(), (0, 0))
         pygame.display.flip()
         self.last_shown = time.time()
         LOG.info('UI displayed')
@@ -79,36 +74,8 @@ class Interface(Thread):
 
     def prepare_ui(self):
         LOG.warning('Preparing UI')
-
         pygame.display.init()
-        pygame.font.init()
-
-        self.total_width = self.windowsize[0]
-        self.total_height = self.windowsize[1]
-
-        self.screen_padding_x = round(self.total_width * self.conf.padding_percent_x / 100)
-        self.screen_padding_y = round(self.total_height * self.conf.padding_percent_y / 100)
-
-        self.tile_spacing_x = round(self.total_width * self.conf.spacing_percent_x / 100)
-        self.tile_spacing_y = round(self.total_height * self.conf.spacing_percent_y / 100)
-
-        self.tile_outer_width = round((self.total_width - 2 * self.screen_padding_x -
-                                       self.tile_spacing_x * (self.conf.grid_x - 1)) /
-                                      self.conf.grid_x)
-        self.tile_outer_height = round((self.total_height - 2 * self.screen_padding_y -
-                                        self.tile_spacing_y * (self.conf.grid_y - 1)) /
-                                       self.conf.grid_y)
-        self.tile_outer_size = (self.tile_outer_width, self.tile_outer_height)
-
-        self.tile_inner_width = self.tile_outer_width - 2 * self.conf.frame_width_px
-        self.tile_inner_height = self.tile_outer_height - 2 * self.conf.frame_width_px
-        self.tile_inner_size = (self.tile_inner_width, self.tile_inner_height)
-
-        self.screen_image.fill(self.conf.bgcolor)
-
-        self.prepare_missing()
-        self.prepare_lightmask()
-        self.prepare_tiles()
+        self.screen_image.fill(CONF.bgcolor)
 
     def reset(self):
         LOG.warning('Resetting UI instance')
@@ -128,180 +95,39 @@ class Interface(Thread):
             self._running.set()
             self.show_ui()
 
-    def read_config(self):
-        LOG.info('Reading config file')
-        self.conf = read_config()
-
-    def prepare_missing(self):
-        LOG.debug('Preparing "Screenshot missing" icon')
-        self.missing = pygame.Surface((150, 200), pygame.SRCALPHA, 32)
-        question_mark = pygame.font.SysFont('sans-serif', 150).render('?', True, (150, 150, 150))
-        question_mark_size = question_mark.get_rect().size
-        origin_x = round((150 - question_mark_size[0])/2)
-        origin_y = round((200 - question_mark_size[1])/2)
-        self.missing.blit(question_mark, (origin_x, origin_y))
-
-    def prepare_tiles(self):
-        LOG.debug('Preparing UI tiles')
-        for idx_x in range(self.conf.grid_x):
-            for idx_y in range(self.conf.grid_y):
-                origin_x = (self.screen_padding_x +
-                            (self.tile_outer_width + self.tile_spacing_x) * idx_x)
-                origin_y = (self.screen_padding_y +
-                            (self.tile_outer_height + self.tile_spacing_y) * idx_y)
-
-                u_l = (origin_x, origin_y)
-                b_r = (origin_x + self.tile_outer_width, origin_y + self.tile_outer_height)
-
-                tile = {
-                    'active': False,
-                    'mouseoff': None,
-                    'mouseon': None,
-                    'ul': u_l,
-                    'br': b_r,
-                    'drawn': False
-                }
-
-                self.tiles[idx_y * self.conf.grid_x + idx_x + 1] = tile
-
-    def get_tile_data(self, index):
-        tile_color = None
-        frame_color = None
-        image = None
-
-        if index in self.updater.knowledge.keys() and self.updater.knowledge[index]['state']:
-            if self.updater.knowledge[index]['screenshot']:
-                if self.updater.active_workspace == index:
-                    tile_color = self.conf.tile_active_color
-                    frame_color = self.conf.frame_active_color
-                    image = process_img(self.updater.knowledge[index]['screenshot'])
-                else:
-                    tile_color = self.conf.tile_inactive_color
-                    frame_color = self.conf.frame_inactive_color
-                    image = process_img(self.updater.knowledge[index]['screenshot'])
-            else:
-                tile_color = self.conf.tile_unknown_color
-                frame_color = self.conf.frame_unknown_color
-                image = self.missing
+    def blit_tile(self, index, active=False, target=None):
+        target = target if target is not None else self.screen_image
+        if active:
+            LOG.debug('Blitting tile %s as active', index)
+            target.blit(self.workspaces[index].tile.surface['mouseon'],
+                        self.workspaces[index].tile.rect)
         else:
-            if index <= self.conf.workspaces:
-                tile_color = self.conf.tile_empty_color
-                frame_color = self.conf.frame_empty_color
-                image = None
-            else:
-                tile_color = self.conf.tile_nonexistant_color
-                frame_color = self.conf.frame_nonexistant_color
-                image = None
-        return tile_color, frame_color, image
-
-    def fit_image(self, image):
-        if self.conf.thumb_stretch:
-            image = pygame.transform.smoothscale(image, self.tile_inner_size)
-            offset_x = 0
-            offset_y = 0
-        else:
-            image_size = image.get_rect().size
-            image_x = image_size[0]
-            image_y = image_size[1]
-            ratio_x = self.tile_inner_width / image_x
-            ratio_y = self.tile_inner_height / image_y
-            if ratio_x < ratio_y:
-                result_x = self.tile_inner_width
-                result_y = round(ratio_x * image_y)
-                offset_x = 0
-                offset_y = round((self.tile_inner_height - result_y) / 2)
-            else:
-                result_x = round(ratio_y * image_x)
-                result_y = self.tile_inner_height
-                offset_x = round((self.tile_inner_width - result_x) / 2)
-                offset_y = 0
-            image = pygame.transform.smoothscale(image, (result_x, result_y))
-        return offset_x, offset_y, image
-
-    def prepare_lightmask(self):
-        self.lightmask = pygame.Surface(self.tile_outer_size, pygame.SRCALPHA, 32)
-        self.lightmask.fill((255, 255, 255, 255 * self.conf.highlight_percentage / 100))
-
-    def generate_lightmask(self, index):
-        mouseon = self.tiles[index]['mouseoff'].copy()
-        mouseon.blit(self.lightmask, (0, 0))
-        self.tiles[index]['mouseon'] = mouseon
-
-    def blit_tile(self, index):
-        LOG.debug('Blitting tile %s', index)
-        tile_color, frame_color, image = self.get_tile_data(index)
-
-        tile = pygame.Surface((self.tile_outer_width, self.tile_outer_height))
-        tile.fill(frame_color)
-        tile.fill(tile_color,
-                  (
-                      self.conf.frame_width_px,
-                      self.conf.frame_width_px,
-                      self.tile_inner_width,
-                      self.tile_inner_height
-                  ))
-
-        if image:
-            offset_x, offset_y, image = self.fit_image(image)
-            tile.blit(image,
-                      (
-                          self.conf.frame_width_px + offset_x,
-                          self.conf.frame_width_px + offset_y
-                      ))
-            self.tiles[index]['drawn'] = True
-        else:
-            self.tiles[index]['drawn'] = False
-
-        self.tiles[index]['mouseoff'] = tile
-        self.screen_image.blit(tile, self.tiles[index]['ul'])
-        self.generate_lightmask(index)
+            LOG.debug('Blitting tile %s', index)
+            target.blit(self.workspaces[index].tile.surface['mouseoff'],
+                        self.workspaces[index].tile.rect)
 
     def blit_name(self, index):
-        font = pygame.font.SysFont(self.conf.names_font, self.conf.names_fontsize)
-        defined_name = False
-        try:
-            defined_name = self.conf.workspace_names[index]
-        except KeyError:
-            pass
-
-        if self.conf.names_show and (index in self.updater.knowledge.keys() or defined_name):
-            if not defined_name:
-                name = self.updater.knowledge[index]['name']
-            else:
-                name = defined_name
-
-            LOG.debug('Blitting name %s: %s', index, name)
-
-            name = font.render(name, True, self.conf.names_color)
-            name_width = name.get_rect().size[0]
-            name_x = self.tiles[index]['ul'][0] + round((self.tile_outer_width - name_width) / 2)
-            name_y = self.tiles[index]['ul'][1] + round(self.tile_outer_height * 1.02)
-            self.screen_image.blit(name, (name_x, name_y))
+        if CONF.names_show and self.workspaces[index].tile.label is not None:
+            LOG.debug('Blitting name %s: %s', index, self.workspaces[index].name)
+            self.screen_image.blit(self.workspaces[index].tile.label.surface,
+                                   self.workspaces[index].tile.label.rect)
 
     def blit_changes(self):
         LOG.info('Blitting tiles')
-        for iter_y in range(self.conf.grid_y):
-            for iter_x in range(self.conf.grid_x):
-                index = iter_y * self.conf.grid_x + iter_x + 1
-                blit = False
-                if index not in self.updater.knowledge.keys():
-                    if self.last_shown < 0 or self.tiles[index]['drawn']:
-                        blit = True
-                else:
-                    if self.updater.knowledge[index]['last-update'] > self.last_shown or \
-                            not self.updater.knowledge[index]['state']:
-                        blit = True
-                if blit:
-                    self.blit_tile(index)
-                    self.blit_name(index)
+        #for index in [workspace.num for workspace in self.workspaces]:
+        for index in range(1, CONF.workspaces + 1):
+            LOG.debug('Checking tile %s (%s) for blitting', index, self.workspaces[index].name)
+            tile = self.workspaces[index].tile
+            tile.update()
+            if self.last_shown is None or \
+                    (tile.last['any'] is not None and tile.last['any'] > self.last_shown):
+                self.blit_tile(index)
+                self.blit_name(index)
 
     def get_mouse_tile(self, mpos):
-        for tile in self.tiles:
-            if (mpos[0] >= self.tiles[tile]['ul'][0] and
-                    mpos[0] <= self.tiles[tile]['br'][0] and
-                    mpos[1] >= self.tiles[tile]['ul'][1] and
-                    mpos[1] <= self.tiles[tile]['br'][1]):
-                return tile
+        for tile in [self.workspaces[workspace].tile for workspace in self.workspaces]:
+            if tile.rect.collidepoint(mpos):
+                return tile.workspace.index
         return None
 
     def get_keyboard_tile(self, kbdmove):
@@ -313,52 +139,45 @@ class Interface(Thread):
         if kbdmove[0] != 0:
             active_tile += kbdmove[0]
         elif kbdmove[1] != 0:
-            active_tile += kbdmove[1] * self.conf.grid_x
+            active_tile += kbdmove[1] * CONF.grid_x
 
-        if active_tile > self.conf.workspaces:
-            return active_tile - self.conf.workspaces
+        if active_tile > CONF.workspaces:
+            return active_tile - CONF.workspaces
         elif active_tile <= 0:
-            return active_tile + self.conf.workspaces
+            return active_tile + CONF.workspaces
         else:
             return active_tile
 
-    def update_ui(self):
-        for tile in self.tiles:
-            if self.tiles[tile]['active'] and not tile == self.active_tile:
-                self.screen.blit(self.tiles[tile]['mouseoff'],
-                                 self.tiles[tile]['ul'])
-                self.tiles[tile]['active'] = False
-                pygame.display.update((self.tiles[tile]['ul'],
-                                       self.tiles[tile]['br']))
-
-        if self.active_tile and not self.tiles[self.active_tile]['active']:
-            self.screen.blit(self.tiles[self.active_tile]['mouseon'],
-                             self.tiles[self.active_tile]['ul'])
-            self.tiles[self.active_tile]['active'] = True
-            pygame.display.update((self.tiles[self.active_tile]['ul'],
-                                   self.tiles[self.active_tile]['br']))
+    def update_ui(self, new_active_tile):
+        if new_active_tile != self.active_tile:
+            if self.active_tile is not None:
+                self.blit_tile(self.active_tile, target=self.screen)
+                pygame.display.update(self.workspaces[self.active_tile].tile.rect)
+            if new_active_tile is not None:
+                self.blit_tile(new_active_tile, active=True, target=self.screen)
+                pygame.display.update(self.workspaces[new_active_tile].tile.rect)
+            self.active_tile = new_active_tile
 
     def do_jump(self):
-        if self.active_tile in self.updater.knowledge.keys():
-            self.con.command('workspace ' + str(self.updater.knowledge[self.active_tile]['name']))
-            LOG.info('Switching to known workspace %s',
-                          self.updater.knowledge[self.active_tile]['name'])
+        if self.active_tile is None:
+            return False
+
+        if self.workspaces[self.active_tile].__class__ != 'EmptyTile':
+            self.con.command('workspace ' + str(self.workspaces[self.active_tile].name))
+            LOG.info('Switching to known workspace %s', self.workspaces[self.active_tile].name)
             return True
-        if self.conf.switch_to_empty_workspaces:
-            defined_name = False
-            try:
-                defined_name = self.conf.workspace_names[self.active_tile]
-            except KeyError:
-                pass
-            if defined_name:
-                self.con.command('workspace ' + defined_name)
-                LOG.info('Switching to predefined workspace %s', defined_name)
-                return True
+
+        if CONF.switch_to_empty_workspaces and self.active_tile in CONF.workspace_names.keys():
+            self.con.command('workspace ' + CONF.workspace_names[self.active_tile])
+            LOG.info('Switching to predefined workspace %s', CONF.workspace_names[self.active_tile])
+            return True
+
         return False
 
     def process_input(self):
         use_mouse = False
         pygame.event.clear()
+        new_active_tile = self.get_mouse_tile(pygame.mouse.get_pos())
         while self._running.is_set() and pygame.display.get_init():
             jump = False
             kbdmove = (0, 0)
@@ -395,19 +214,19 @@ class Interface(Thread):
                     break
 
             if use_mouse:
-                self.active_tile = self.get_mouse_tile(pygame.mouse.get_pos())
+                new_active_tile = self.get_mouse_tile(pygame.mouse.get_pos())
 
             elif kbdmove != (0, 0):
-                self.active_tile = self.get_keyboard_tile(kbdmove)
+                new_active_tile = self.get_keyboard_tile(kbdmove)
 
             if jump and self.do_jump():
                 break
 
-            self.update_ui()
+            self.update_ui(new_active_tile)
             pygame.time.wait(25)
 
         if not jump:
             LOG.info('Selection canceled, jumping to last active workspace %s',
-                          self.updater.knowledge[self.updater.active_workspace]['name'])
+                          self.workspaces[self.workspaces.active_workspace].name)
             self.con.command('workspace ' +
-                             self.updater.knowledge[self.updater.active_workspace]['name'])
+                             self.workspaces[self.workspaces.active_workspace].name)

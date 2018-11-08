@@ -1,0 +1,8 @@
+- Handle workspaces being destroyed and created
+- Empty workspaced named None after switching
+- Screenshot on wrong workspace in keyboard mode?
+- Name handling without prenamed
+- SIGHUP handling
+- Docstrings
+- Adapt README
+

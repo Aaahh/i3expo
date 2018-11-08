@@ -15,16 +15,11 @@ import i3ipc
 from PIL import Image
 from xdg.BaseDirectory import xdg_config_home
 
-from config import read_config
+from config import CONF
 
-SCREENSHOT_LIB = 'prtscn.so'
-SCREENSHOT_LIB_PATH = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + SCREENSHOT_LIB
-GRAB = ctypes.CDLL(SCREENSHOT_LIB_PATH)
-GRAB.getScreen.argtypes = []
 BLACKLIST = ['i3expod.py', None]
 
 LOG = logging.getLogger('updt')
-
 
 def lockable(f):
     def wrapper(*args, **kwargs):
@@ -40,15 +35,16 @@ def lockable(f):
 
 
 class Updater(Thread):
-    def __init__(self):
+    def __init__(self, workspaces_instance):
         Thread.__init__(self)
         self.daemon = True
 
-        self.active_workspace = None
-
         self.con = i3ipc.Connection()
-        self.read_config()
-        self.init_knowledge()
+
+        self.workspaces = workspaces_instance
+        for workspace in self.con.get_tree().workspaces():
+            self.workspaces.init_workspace(workspace.num)
+        self.workspaces.set_active(self.con.get_tree().find_focused().workspace().num)
 
         self._running = Event()
         self._running.set()
@@ -60,6 +56,11 @@ class Updater(Thread):
         self.con.on('window::floating', self.update)
         self.con.on('window::fullscreen_mode', self.update)
         self.con.on('window::focus', self.update)
+
+        self.con.on('workspace::focus', self.set_active_workspace)
+        self.con.on('workspace::init', self.initialize_workspace)
+        self.con.on('workspace::empty', self.remove_workspace)
+        self.con.on('workspace::rename', self.rename_workspace)
 
     def run(self):
         self.update()
@@ -73,8 +74,8 @@ class Updater(Thread):
 
     def reset(self):
         LOG.warning('Reinitializing updater')
-        self.read_config()
-        self.init_knowledge()
+        self.workspaces.reset()
+        self.workspaces.active_workspace = self.con.get_tree().find_focused().workspace().num
         self.update()
 
     def destroy(self):
@@ -82,38 +83,15 @@ class Updater(Thread):
         self.con.main_quit()
         self._stop.set()
 
-    def init_workspace(self, workspace):
-        self.knowledge[workspace.num] = {
-            'name':         workspace.name,
-            'screenshot':   None,
-            'last-update':  0.0,
-            'state':        ()
-        }
-        for cont in workspace.leaves():
-            self.knowledge[workspace.num]['state'] += \
-                    ((cont.id, cont.rect.x, cont.rect.y, cont.rect.width, cont.rect.height),)
-
-    def init_knowledge(self):
-        LOG.info('Initializing workspace knowledge')
-        self.knowledge = {}
-        for workspace in self.con.get_tree().workspaces():
-            if workspace.num not in self.knowledge.keys():
-                self.init_workspace(workspace)
-
-        self.active_workspace = self.con.get_tree().find_focused().workspace().num
-
     def stop_timer(self, quiet=False):
         if not quiet:
             LOG.info('Stopping forced background updates')
-        try:
-            self.timer.cancel()
-        except AttributeError:
-            pass
+        self.timer.cancel()
 
     def start_timer(self, quiet=False):
         if not quiet:
             LOG.info('Starting forced background updates')
-        self.timer = Timer(self.conf.forced_update_interval_sec, self.update)
+        self.timer = Timer(CONF.forced_update_interval_sec, self.update)
         self.timer.start()
 
     def set_new_update_timer(self):
@@ -121,12 +99,29 @@ class Updater(Thread):
         self.stop_timer(quiet=True)
         self.start_timer(quiet=True)
 
-    def data_older_than(self, what):
-        old = self.knowledge[self.active_workspace]['screenshot'] is None or \
-                time.time() - self.knowledge[self.active_workspace]['last-update'] > what
-        LOG.debug('Screenshot data for workspace %s is%solder than %ss',
-                       self.active_workspace, (' not ' if not old else ' '), what)
-        return old
+    def set_active_workspace(self, ipc, stack_frame):
+        del ipc
+        if not stack_frame.current.name == 'i3expo-temporary-workspace':
+            LOG.info('Active workspace changed to %s', stack_frame.current.name)
+            self.workspaces.set_active(stack_frame.current.num)
+
+    def initialize_workspace(self, ipc, stack_frame):
+        del ipc
+        if not stack_frame.current.name == 'i3expo-temporary-workspace':
+            LOG.info('New workspace: %s', stack_frame.current.num)
+            self.workspaces.init_workspace(stack_frame.current.num)
+
+    def remove_workspace(self, ipc, stack_frame):
+        del ipc
+        if not stack_frame.current.name == 'i3expo-temporary-workspace':
+            LOG.info('Workspace deleted: %s', stack_frame.current.num)
+            self.workspaces.remove_workspace(stack_frame.current.num)
+
+    def rename_workspace(self, ipc, stack_frame):
+        del ipc
+        if not stack_frame.current.name == 'i3expo-temporary-workspace':
+            LOG.info('Workspace renamed: %s', stack_frame.current.num)
+            self.workspaces.rename_workspace(stack_frame.current.num)
 
     @lockable
     def update(self, ipc=None, stack_frame=None):
@@ -143,66 +138,11 @@ class Updater(Thread):
 
         self._running.wait()
 
-        if not self.data_older_than(self.conf.min_update_interval_sec):
-            return False
-
-        tree = self.con.get_tree()
-        workspace = tree.find_focused().workspace()
-        self.active_workspace = workspace.num
-
-        if self.active_workspace not in self.knowledge.keys():
-            self.init_workspace(workspace)
-
-        wspace_nums = [w.num for w in tree.workspaces()]
-        deleted = []
-        for item in self.knowledge:
-            if item not in wspace_nums:
-                deleted.append(item)
-        for item in deleted:
-            del self.knowledge[item]
-
-        if self.active_workspace_state_has_changed() or \
-           self.data_older_than(self.conf.forced_update_interval_sec):
-            LOG.debug('Fetching update data for workspace %s', self.active_workspace)
-            screenshot = self.grab_screen()
-            if self._running.is_set():
-                self.knowledge[self.active_workspace]['screenshot'] = screenshot
-                self.knowledge[self.active_workspace]['last-update'] = time.time()
+        for index in self.workspaces:
+            self.workspaces[index].update()
 
         self.set_new_update_timer()
         return True
-
-    def active_workspace_state_has_changed(self):
-        state = ()
-        for cont in self.con.get_tree().find_focused().workspace().leaves():
-            state += ((cont.id, cont.rect.x, cont.rect.y, cont.rect.width, cont.rect.height),)
-
-        if self.knowledge[self.active_workspace]['state'] == state:
-            LOG.debug('Workspace %s has not changed', self.active_workspace)
-            return False
-
-        self.knowledge[self.active_workspace]['state'] = state
-        LOG.debug('Workspace %s has changed', self.active_workspace)
-        return True
-
-    def read_config(self):
-        LOG.warning('Reading config file')
-        self.conf = read_config()
-
-    def grab_screen(self):
-        LOG.debug('Taking a screenshot, probably of workspace %s', self.active_workspace)
-
-        width = self.conf.screenshot_width - self.conf.screenshot_offset_x
-        height = self.conf.screenshot_height - self.conf.screenshot_offset_y
-        size = width * height
-        objlength = size * 3
-
-        result = (ctypes.c_ubyte * objlength)()
-
-        GRAB.getScreen(self.conf.screenshot_offset_x, self.conf.screenshot_offset_y,
-                       width, height, result)
-        LOG.debug('Screenshot taken, probably of workspace %s', self.active_workspace)
-        return (width, height, result)
 
     def lock(self):
         self._running.clear()
