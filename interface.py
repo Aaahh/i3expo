@@ -8,6 +8,7 @@ import pygame
 import i3ipc
 from PIL import Image
 
+from exthread import ExThread
 from config import CONF
 
 LOG = logging.getLogger('intf')
@@ -21,9 +22,9 @@ def process_img(raw_img):
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
-class Interface(Thread):
+class Interface(ExThread):
     def __init__(self, workspaces_instance, updater_instance):
-        Thread.__init__(self)
+        ExThread.__init__(self)
         self.daemon = True
 
         self.con = i3ipc.Connection()

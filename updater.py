@@ -8,13 +8,14 @@ import sys
 import time
 import logging
 from types import SimpleNamespace
-from threading import Thread, Event, Timer
+from threading import Event, Timer
 
 import pygame
 import i3ipc
 from PIL import Image
 from xdg.BaseDirectory import xdg_config_home
 
+from exthread import ExThread
 from config import CONF
 
 BLACKLIST = ['i3expod.py', None]
@@ -34,12 +35,13 @@ def lockable(f):
     return wrapper
 
 
-class Updater(Thread):
+class Updater(ExThread):
     def __init__(self, workspaces_instance):
-        Thread.__init__(self)
+        ExThread.__init__(self)
         self.daemon = True
 
         self.con = i3ipc.Connection()
+        self.i3_thread = None
 
         self.workspaces = workspaces_instance
         for workspace in self.con.get_tree().workspaces():
@@ -65,9 +67,9 @@ class Updater(Thread):
     def run(self):
         self.update()
 
-        i3_thread = Thread(target=self.con.main)
-        i3_thread.daemon = True
-        i3_thread.start()
+        self.i3_thread = ExThread(target=self.con.main)
+        self.i3_thread.daemon = True
+        self.i3_thread.start()
         LOG.info('i3ipc thread running')
 
         self._stop.wait()

@@ -95,7 +95,7 @@ class Workspace:
         LOG.info('Workspace %s (%s) initialized', self.index, self.name)
 
     def set_name(self):
-        if CONF.workspace_names[self.index]:
+        if self.index in CONF.workspace_names.keys():
             self.name = CONF.workspace_names[self.index]
         else:
             self.name = "abcd" # TODO

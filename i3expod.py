@@ -53,4 +53,9 @@ if __name__ == '__main__':
     logging.warning('Setup finished')
 
     while True:
-        time.sleep(10)
+        time.sleep(1)
+        for thread in [UPDATER, UPDATER.i3_thread, INTERFACE]:
+            if thread.crashed:
+                logging.exception('Thread %s has crashed', thread.__class__.__name__)
+                sys.exit(1)
+
