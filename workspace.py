@@ -11,6 +11,7 @@ from PIL import Image
 
 from config import CONF
 from tile import CapturedTile, UnknownTile, EmptyTile
+from debounce import debounce
 
 LOG = logging.getLogger('work')
 SCREENSHOT_LIB = 'prtscn.so'
@@ -21,7 +22,7 @@ GRAB.getScreen.argtypes = []
 
 class Workspaces(dict):
     def __init__(self):
-        self.active_workspace = None
+        self.con = i3ipc.Connection()
 
     def __getitem__(self, key):
         if not isinstance(key, int) or key < 0:
@@ -49,9 +50,9 @@ class Workspaces(dict):
         LOG.info('Renaming workspace %s', index)
         self[index].set_name()
 
-    def set_active(self, index):
-        LOG.debug('Active workspace is now %s', index)
-        self.active_workspace = index
+    def get_active_workspace(self):
+        # Necessary due to >50ms latency in workspace::focus event
+        return self.con.get_tree().find_focused().workspace().num
 
     def reset(self):
         LOG.warning('Resetting all workspace data')
@@ -110,6 +111,7 @@ class Workspace:
         self.last[what] = when
         self.last['any'] = when
 
+    @debounce(0.1)
     def capture(self):
         LOG.debug('Taking screenshot of workspace %s: %s', self.index, self.name)
         width = CONF.screenshot_dim[0] - CONF.screenshot_offset[0]
@@ -119,9 +121,10 @@ class Workspace:
 
         result = (ctypes.c_ubyte * objlength)()
 
-        GRAB.getScreen(CONF.screenshot_offset_x, CONF.screenshot_offset_y,
-                       width, height, result)
-        if self.workspaces.active_workspace == self.index:
+        if self.is_active():
+            GRAB.getScreen(CONF.screenshot_offset_x, CONF.screenshot_offset_y,
+                           width, height, result)
+        if self.is_active():
             self.screenshot = (width, height, result)
             self.set_last('screenshot')
             LOG.debug('Screenshot of workspace %s (%s) taken', self.index, self.name)
@@ -150,6 +153,9 @@ class Workspace:
             self.set_last('state')
         return changed
 
+    def is_active(self):
+        return self.index == self.workspaces.get_active_workspace()
+
     def update(self):
         if self.last['state'] is not None and \
                 time.time() - self.last['state'] < CONF.min_update_interval_sec:
@@ -159,9 +165,9 @@ class Workspace:
 
         state_changed = self.set_state()
 
-        if self.workspaces.active_workspace == self.index and \
+        if self.is_active() and \
                 (state_changed or self.screenshot_older_than(CONF.forced_update_interval_sec)):
-            if isinstance(self.tile, UnknownTile) and self.capture():
+            if isinstance(self.tile, UnknownTile) and self.capture() == True:
                 LOG.info('Workspace %s (%s) captured for the first time',
                          self.index, self.name)
                 self.tile = CapturedTile(self)

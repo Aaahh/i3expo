@@ -223,6 +223,6 @@ class Interface(ExThread):
 
         if not jump:
             LOG.info('Selection canceled, jumping to last active workspace %s',
-                          self.workspaces[self.workspaces.active_workspace].name)
+                          self.workspaces[self.workspaces.get_active_workspace()].name)
             self.con.command('workspace ' +
-                             self.workspaces[self.workspaces.active_workspace].name)
+                             self.workspaces[self.workspaces.get_active_workspace()].name)

@@ -46,7 +46,6 @@ class Updater(ExThread):
         self.workspaces = workspaces_instance
         for workspace in self.con.get_tree().workspaces():
             self.workspaces.init_workspace(workspace.num)
-        self.workspaces.set_active(self.con.get_tree().find_focused().workspace().num)
 
         self._running = Event()
         self._running.set()
@@ -59,7 +58,6 @@ class Updater(ExThread):
         self.con.on('window::fullscreen_mode', self.update)
         self.con.on('window::focus', self.update)
 
-        self.con.on('workspace::focus', self.set_active_workspace)
         self.con.on('workspace::init', self.initialize_workspace)
         self.con.on('workspace::empty', self.remove_workspace)
         self.con.on('workspace::rename', self.rename_workspace)
@@ -77,7 +75,6 @@ class Updater(ExThread):
     def reset(self):
         LOG.warning('Reinitializing updater')
         self.workspaces.reset()
-        self.workspaces.active_workspace = self.con.get_tree().find_focused().workspace().num
         self.update()
 
     def destroy(self):
@@ -100,12 +97,6 @@ class Updater(ExThread):
         LOG.info('Resetting update timer')
         self.stop_timer(quiet=True)
         self.start_timer(quiet=True)
-
-    def set_active_workspace(self, ipc, stack_frame):
-        del ipc
-        if not stack_frame.current.name == 'i3expo-temporary-workspace':
-            LOG.info('Active workspace changed to %s', stack_frame.current.name)
-            self.workspaces.set_active(stack_frame.current.num)
 
     def initialize_workspace(self, ipc, stack_frame):
         del ipc

@@ -121,7 +121,7 @@ class CapturedTile(BaseTile):
     def set_colors(self):
         old_color = self.color
         if self.workspace.state:
-            if self.workspace.workspaces.active_workspace == self.workspace.index:
+            if self.workspace.is_active():
                 self.color = CONF.colors['active']
             else:
                 self.color = CONF.colors['inactive']
@@ -189,3 +189,6 @@ class Label:
             self.rect.center = self.tile.rect.midbottom
             self.rect.centery += CONF.tile_dim_outer[1] * 0.05
             self.surface = name
+import time
+
+
