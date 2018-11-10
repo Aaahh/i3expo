@@ -67,10 +67,15 @@ class DummyWorkspace:
                 'any': None
         }
         self.state = ()
+        self.set_name()
         self.tile = EmptyTile(self)
 
     def update(self):
         pass
+
+    def set_name(self):
+        if CONF.switch_to_empty_workspaces and self.index in CONF.workspace_names.keys():
+            self.name = CONF.workspace_names[self.index]
 
 class Workspace:
     def __init__(self, parent, num):

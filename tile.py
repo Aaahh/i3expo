@@ -12,19 +12,15 @@ from config import CONF
 LOG = logging.getLogger('tile')
 
 pygame.font.init()
-QUESTION_MARK = pygame.font.SysFont('sans-serif', 250).render('?', True, (150, 150, 150))
+QUESTION_MARK = pygame.font.SysFont('sans-serif', round(CONF.window_dim[1] / 4)).render('?', True, (150, 150, 150))
 
 
 def process_img(raw_img):
-    #try:
-    #except TypeError: #TODO: Remove?
-    #    return None
-
     pil = Image.frombuffer('RGB', (raw_img[0], raw_img[1]), raw_img[2], 'raw', 'RGB', 0, 1)
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
 
 
-def fit_image(image):
+def fit_image_to_tile(image):
     if CONF.thumb_stretch:
         image = pygame.transform.smoothscale(image, CONF.tile_dim_inner)
         offset = [0, 0]
@@ -99,7 +95,7 @@ class BaseTile:
         tile.fill(self.color['frame'])
         tile.fill(self.color['tile'], [CONF.frame_width_px] * 2 + CONF.tile_dim_inner)
         if self.screenshot:
-            offset, image = fit_image(self.screenshot)
+            offset, image = fit_image_to_tile(self.screenshot)
             tile.blit(image, [offset[n] + CONF.frame_width_px for n in (0,1)])
         self.surface['mouseoff'] = tile
         self.surface['mouseon'] = Lightmask().get_masked(tile)
@@ -172,6 +168,7 @@ class EmptyTile(BaseTile):
         self.set_rect()
         self.color = CONF.colors['empty']
         self.set_surface()
+        self.label = Label(self)
 
 
 class Label:
@@ -179,28 +176,16 @@ class Label:
         self.tile = parent
         self.rect = ()
         self.surface = None
+        self.font = pygame.font.SysFont(CONF.names_font, CONF.names_fontsize)
 
         self.set_surface()
 
+
     def set_surface(self):
-        font = pygame.font.SysFont(CONF.names_font, CONF.names_fontsize)
-        defined_name = False
-        try:
-            defined_name = CONF.workspace_names[self.tile.workspace.index]
-        except KeyError:
-            pass
-
-        if self.tile.workspace.state or defined_name:
-            if not defined_name:
-                name = self.tile.workspace.title
-            else:
-                name = defined_name
-
-            name = font.render(name, True, CONF.names_color)
-            name_rect = name.get_rect().size
-            self.rect = pygame.Rect(self.tile.rect.topleft[0] + round(CONF.tile_dim_outer[0] - name_rect[0]) / 2,
-                                    self.tile.rect.topleft[1] + round(CONF.tile_dim_outer[1] * 1.02),
-                                    name_rect[0],
-                                    name_rect[1])
-
+        if self.tile.workspace.name is not None:
+            name = self.tile.workspace.name.split(':', 1)[1]
+            name = self.font.render(name, True, CONF.names_color)
+            self.rect = name.get_rect()
+            self.rect.center = self.tile.rect.midbottom
+            self.rect.centery += CONF.tile_dim_outer[1] * 0.05
             self.surface = name

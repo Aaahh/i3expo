@@ -108,7 +108,7 @@ class Interface(ExThread):
                         self.workspaces[index].tile.rect)
 
     def blit_name(self, index):
-        if CONF.names_show and self.workspaces[index].tile.label is not None:
+        if CONF.names_show and self.workspaces[index].tile.label.surface is not None:
             LOG.debug('Blitting name %s: %s', index, self.workspaces[index].name)
             self.screen_image.blit(self.workspaces[index].tile.label.surface,
                                    self.workspaces[index].tile.label.rect)
@@ -163,14 +163,9 @@ class Interface(ExThread):
         if self.active_tile is None:
             return False
 
-        if self.workspaces[self.active_tile].__class__ != 'EmptyTile':
+        if self.workspaces[self.active_tile].name is not None:
             self.con.command('workspace ' + str(self.workspaces[self.active_tile].name))
             LOG.info('Switching to known workspace %s', self.workspaces[self.active_tile].name)
-            return True
-
-        if CONF.switch_to_empty_workspaces and self.active_tile in CONF.workspace_names.keys():
-            self.con.command('workspace ' + CONF.workspace_names[self.active_tile])
-            LOG.info('Switching to predefined workspace %s', CONF.workspace_names[self.active_tile])
             return True
 
         return False

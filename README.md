@@ -87,3 +87,5 @@ probably be handled better, but this needs more testing.
 
 Stackoverflow user JHolta for the screenshot library to be found in this thread:
 https://stackoverflow.com/questions/69645/take-a-screenshot-via-a-python-script-linux
+Ben Leslie for the ExThread class: http://benno.id.au/blog/2012/10/06/python-thread-exceptions
+@laur891 for code that couldn't be merged directly
